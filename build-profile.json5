@@ -1,0 +1,55 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.cer",
+          "storePassword": "0000001B500B9BF5083161E36B3DC4CEC9A3F62AD49B9A8F1C6608A92109FE08FCC31E7AB65D0E604809BD",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BC43BD5B43D26C7A6B7FBE33670CD8D1EB79DEA9AF46139CBB7C642CB83C97A47ED9949F066DE5D",
+          "profile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.p12"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compatibleSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}
