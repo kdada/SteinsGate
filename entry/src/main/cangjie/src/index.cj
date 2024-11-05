@@ -5,16 +5,26 @@ internal import ohos.ark_interop.JSContext
 internal import ohos.ark_interop.JSCallInfo
 internal import ohos.ark_interop.JSValue
 internal import cj_res_entry.app
+import ohos_app_cangjie_entry.tun.*
 
-var tunFd = -1
+var device: ?TunDevice = None
 
 func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
-    tunFd = Int64(callInfo[0].toNumber())
-    return runtime.number(Float64(tunFd + 1)).toJSValue()
+    if (device.isSome()) {
+        stopVpn(runtime, callInfo)
+    }
+    let tunFd = Int32(callInfo[0].toNumber())
+    device = TunDevice(tunFd)
+    device?.register(TcpStack())
+    device?.register(UdpStack())
+    device?.start()
+    return runtime.undefined().toJSValue()
 }
 
 func stopVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
-    return runtime.number(Float64(tunFd)).toJSValue()
+    device?.stop()
+    device = None
+    return runtime.undefined().toJSValue()
 }
 
 let EXPORT_MODULE = JSModule.registerModule {

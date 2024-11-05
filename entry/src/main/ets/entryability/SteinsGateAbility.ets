@@ -21,13 +21,9 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
     this.vpnConnection = vpnExtension.createVpnConnection(this.context);
     hilog.info(0x0000, 'debugVPN', '%{public}s', 'Succeeded to create vpn connection');
     await this.SetupVpn();
-    this.CreateTunnel();
-    await this.Protect();
-  }
-
-  CreateTunnel() {
-    this.connFd = cjlib.startVpn(this.tunFd);
-    hilog.info(0x0000, 'debugVPN', `Succeeded to connect server: ${this.connFd}`);
+    cjlib.startVpn(this.tunFd);
+    hilog.info(0x0000, 'debugVPN', `Succeeded to connect server`);
+    //await this.Protect();
   }
 
   async Protect(): Promise<void> {
@@ -92,8 +88,8 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
   }
 
   async onDestroy(): Promise<void> {
-    let fd = cjlib.stopVpn()
-    hilog.info(0x0000, 'debugVPN', `Succeeded to disconnect server: ${fd}`);
+    cjlib.stopVpn()
+    hilog.info(0x0000, 'debugVPN', `Succeeded to disconnect server`);
     try {
       await this.vpnConnection?.destroy()
       hilog.info(0x0000, 'debugVPN', `Succeeded to destroy vpn: ${this.tunFd}`);
