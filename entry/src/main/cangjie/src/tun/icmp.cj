@@ -16,15 +16,17 @@ extend IPPacket {
 
     func icmpId(): UInt16 {
         let headerOffset = headerLength()
-        return UInt16(data[headerOffset + 4]) << 8 + UInt16(data[headerOffset + 5])
+        return (UInt16(data[headerOffset + 4]) << 8) + UInt16(data[headerOffset + 5])
     }
 
+    @OverflowWrapping
     func setIcmpId(id: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset + 4] = UInt8(id >> 8)
         data[headerOffset + 5] = UInt8(id)
     }
 
+    @OverflowWrapping
     func resumIcmp() {
         let headerOffset = headerLength()
         data[headerOffset + 2] = 0
@@ -41,8 +43,8 @@ public class IcmpStack <: IPProtocolStack {
     }
 
     public override func pop(packet: IPPacket) {
-        Hilog.debug(0, "debugTun",
-            "ICMP: Size: ${packet.length()} From ${packet.srcIPString()} To ${packet.destIPString()}")
+        //Hilog.debug(0, "debugTun",
+        //    "ICMP: Size: ${packet.length()} From ${packet.srcIPString()} To ${packet.destIPString()}")
         packet.release()
     }
 }

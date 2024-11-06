@@ -6,7 +6,6 @@ package ohos_app_cangjie_entry.tun
 import std.collection.concurrent.BlockingQueue
 import std.collection.HashMap
 import std.os.posix.read
-import ohos.hilog.Hilog
 import std.sync.sleep
 import std.time.Duration
 import net.http.ClientBuilder
@@ -34,6 +33,7 @@ public class IPPacket {
         (Int64(data[2]) << 8) + Int64(data[3])
     }
 
+    @OverflowWrapping
     func setLength(len: Int64) {
         data[2] = UInt8(len >> 8)
         data[3] = UInt8(len)
@@ -79,7 +79,7 @@ public class IPPacket {
     }
 
     func validateIPHeader(): Bool {
-        sum(data.slice(0, headerLength())) == 0xffff
+        sum(data.slice(0, headerLength())) == 0
     }
 
     func resetIPHeader() {
@@ -92,6 +92,7 @@ public class IPPacket {
         data[8] = 255
     }
 
+    @OverflowWrapping
     func resumIPHeader() {
         data[10] = 0
         data[11] = 0
@@ -100,32 +101,34 @@ public class IPPacket {
         data[11] = UInt8(result)
     }
 
+    @OverflowWrapping
     func sum(data: Array<UInt8>): UInt16 {
         var result: UInt32 = 0
         for (i in 0..data.size - 1 : 2) {
-            result += UInt32(data[i]) << 8 + UInt32(data[i + 1])
+            result += (UInt32(data[i]) << 8) + UInt32(data[i + 1])
         }
         if (data.size % 2 == 1) {
             result += UInt32(data[data.size - 1]) << 8
         }
         while ((result & 0xffff0000) != 0) {
-            result = result >> 16 + result & 0x0000ffff
+            result = (result >> 16) + (result & 0x0000ffff)
         }
         return !UInt16(result)
     }
 
-    func sumWithPseudoIPHeader(data: Array<UInt8>): UInt16 {
+    @OverflowWrapping
+    func sumWithPseudoIPHeader(payload: Array<UInt8>): UInt16 {
         let pseudoHeader = Array<UInt8>(12, item: 0)
         data.copyTo(pseudoHeader, 12, 0, 4)
         data.copyTo(pseudoHeader, 16, 4, 4)
         pseudoHeader[9] = data[9]
-        pseudoHeader[10] = UInt8(data.size >> 8)
-        pseudoHeader[11] = UInt8(data.size)
+        pseudoHeader[10] = UInt8(payload.size >> 8)
+        pseudoHeader[11] = UInt8(payload.size)
         let pseudoHeaderSum = sum(pseudoHeader)
-        let dataSum = sum(data)
+        let dataSum = sum(payload)
         var result = UInt32(!pseudoHeaderSum) + UInt32(!dataSum)
         while ((result & 0xffff0000) != 0) {
-            result = result >> 16 + result & 0x0000ffff
+            result = (result >> 16) + (result & 0x0000ffff)
         }
         return !UInt16(result)
     }
@@ -159,7 +162,7 @@ public interface IPProtocolStack {
 public class TunDevice {
     // Tun 设备文件描述符
     let tunFd: Int32
-    var runing: Bool = false
+    var running: Bool = false
     let stacks = HashMap<UInt8, IPProtocolStack>()
     var pool: IPPacketPool
     var reader: ?Future<Unit> = None
@@ -178,48 +181,52 @@ public class TunDevice {
     }
 
     public func start() {
-        runing = true
+        running = true
         reader = spawn {
             readLoop()
         }
     }
 
     public func stop() {
-        if (!runing) {
+        if (!running) {
             return
         }
-        runing = false
+        running = false
         reader?.get()
     }
 
     private func readLoop() {
         unsafe {
-            var buffer = LibC.malloc<UInt8>(count: IPPacketMaxSize)
-            while (runing) {
-                let size = read(tunFd, buffer, UIntNative(IPPacketMaxSize))
+            try {
+                var buffer = LibC.malloc<UInt8>(count: IPPacketMaxSize)
+                while (running) {
+                    let size = read(tunFd, buffer, UIntNative(IPPacketMaxSize))
 
-                if (size == -1) {
-                    sleep(Duration.millisecond * 10)
-                    continue
-                }
+                    if (size == -1) {
+                        sleep(Duration.millisecond * 10)
+                        continue
+                    }
 
-                let packet = pool.getPacket()
-                for (i in 0..Int64(size)) {
-                    packet.data[i] = buffer.read(i)
+                    let packet = pool.getPacket()
+                    for (i in 0..Int64(size)) {
+                        packet.data[i] = buffer.read(i)
+                    }
+                    if (!packet.isIPv4()) {
+                        continue
+                    }
+                    if (packet.length() != Int64(size)) {
+                        packet.release()
+                        continue
+                    }
+
+                    match (stacks.get(packet.protocol())) {
+                        case Some(stack) => stack.pop(packet)
+                        case _ => packet.release()
+                    }
                 }
-                if (!packet.isIPv4()) {
-                    continue
-                }
-                if (packet.length() != Int64(size)) {
-                    packet.release()
-                    continue
-                }
-                match (stacks.get(packet.protocol())) {
-                    case Some(stack) => stack.pop(packet)
-                    case _ => packet.release()
-                }
+                LibC.free(buffer)
+            } catch (e: Exception) {
             }
-            LibC.free(buffer)
         }
     }
 

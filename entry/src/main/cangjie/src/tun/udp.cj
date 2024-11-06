@@ -4,8 +4,7 @@
 package ohos_app_cangjie_entry.tun
 
 import ohos.hilog.Hilog
-import std.collection.ArrayList
-import std.collection.none
+import std.collection.*
 import std.collection.concurrent.NonBlockingQueue
 import std.socket.*
 import std.time.Duration
@@ -13,9 +12,10 @@ import std.time.Duration
 extend IPPacket {
     func udpSrcPort(): UInt16 {
         let headerOffset = headerLength()
-        return UInt16(data[headerOffset]) << 8 + UInt16(data[headerOffset + 1])
+        return (UInt16(data[headerOffset]) << 8) + UInt16(data[headerOffset + 1])
     }
 
+    @OverflowWrapping
     func setUdpSrcPort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset] = UInt8(port >> 8)
@@ -24,9 +24,10 @@ extend IPPacket {
 
     func udpDestPort(): UInt16 {
         let headerOffset = headerLength()
-        return UInt16(data[headerOffset + 2]) << 8 + UInt16(data[headerOffset + 3])
+        return (UInt16(data[headerOffset + 2]) << 8) + UInt16(data[headerOffset + 3])
     }
 
+    @OverflowWrapping
     func setUdpDestPort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset + 2] = UInt8(port >> 8)
@@ -39,16 +40,17 @@ extend IPPacket {
 
     func udpLength(): Int64 {
         let headerOffset = headerLength()
-        return Int64(data[headerOffset + 4]) << 8 + Int64(data[headerOffset + 5])
+        return (Int64(data[headerOffset + 4]) << 8) + Int64(data[headerOffset + 5])
     }
 
+    @OverflowWrapping
     func setUdpLength(len: Int64) {
         let headerOffset = headerLength()
         data[headerOffset + 4] = UInt8(len >> 8)
         data[headerOffset + 5] = UInt8(len)
     }
 
-    func updPayload(): Array<UInt8> {
+    func udpPayload(): Array<UInt8> {
         let headerLen = headerLength() + udpHeaderLength()
         data.slice(headerLen, length() - headerLen)
     }
@@ -57,6 +59,7 @@ extend IPPacket {
         payload.copyTo(data, 0, headerLength() + udpHeaderLength(), payload.size)
     }
 
+    @OverflowWrapping
     func resumUdp() {
         let headerOffset = headerLength()
         data[headerOffset + 6] = 0
@@ -64,6 +67,21 @@ extend IPPacket {
         let result = sumWithPseudoIPHeader(payload())
         data[headerOffset + 6] = UInt8(result >> 8)
         data[headerOffset + 7] = UInt8(result)
+    }
+
+    func validateUdp(): Bool {
+        sumWithPseudoIPHeader(payload()) == 0
+    }
+}
+
+extend IPPacket {
+    func dnsHeaderLength(): Int64 {
+        12
+    }
+
+    func dnsQuestionCount(): Int64 {
+        let headerOffset = headerLength() + udpHeaderLength()
+        return (Int64(data[headerOffset + 4]) << 8) + Int64(data[headerOffset + 5])
     }
 }
 
@@ -91,8 +109,6 @@ public class UdpStack <: IPProtocolStack {
     }
 
     public override func pop(packet: IPPacket) {
-        Hilog.debug(0, "debugTun",
-            "UDP: Size: ${packet.length()} From ${packet.srcIPString()} To ${packet.destIPString()}")
         var h: ?UdpHandler = None
         for (handler in handlers) {
             if (handler.canHandle(packet)) {
@@ -100,11 +116,10 @@ public class UdpStack <: IPProtocolStack {
                 break
             }
         }
-        if (h.isNone()) {
-            packet.release()
+        match (h) {
+            case Some(handler) => handler.handle(packet)
+            case _ => packet.release()
         }
-        h?.handle(packet)
-        return
     }
 
     public func send(fromIP: Array<UInt8>, fromPort: UInt16, toIP: Array<UInt8>, toPort: UInt16, payload: Array<UInt8>) {
@@ -121,6 +136,47 @@ public class UdpStack <: IPProtocolStack {
         packet.resumIPHeader()
         packet.resumUdp()
         this.device.writePacket(packet)
+        packet.release()
+    }
+}
+
+public class UdpDirectHandler <: UdpHandler {
+    let udpStack: UdpStack
+
+    public init(stack: UdpStack) {
+        udpStack = stack
+    }
+
+    public func canHandle(packet: IPPacket): Bool {
+        true
+    }
+
+    public func handle(packet: IPPacket): Unit {
+        spawn {
+            redirectUdp(packet)
+        }
+        return
+    }
+
+    func redirectUdp(packet: IPPacket) {
+        try {
+            let udp = UdpSocket(bindAt: 0)
+            udp.sendTimeout = Duration.second * 30
+            udp.bind()
+            udp.connect(SocketAddress(SocketAddressKind.IPv4, packet.destIP(), packet.udpDestPort()))
+            let payload = packet.udpPayload()
+            udp.send(payload)
+            let buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+            let dataSize = udp.receive(buffer)
+            if (dataSize <= buffer.size) {
+                udpStack.send(packet.destIP(), packet.udpDestPort(), packet.srcIP(), packet.udpSrcPort(),
+                    buffer.slice(0, dataSize))
+            }
+        } catch (e: Exception) {
+            Hilog.debug(0, "debugTun", "UDP Exception: ${e}")
+        } finally {
+            packet.release()
+        }
     }
 }
 
@@ -144,19 +200,39 @@ public class DnsHandler <: UdpHandler {
         return
     }
 
+    func getRequestDomains(packet: IPPacket): Array<String> {
+        let domains = ArrayList<String>()
+        var offset = packet.headerLength() + packet.udpHeaderLength() + packet.dnsHeaderLength()
+        for (record in 0..packet.dnsQuestionCount()) {
+            var domain = ""
+            while (packet.data[offset] != 0) {
+                for (i in 0..packet.data[offset]) {
+                    domain += "${Rune(packet.data[offset + 1 + Int64(i)])}"
+                }
+                domain += "."
+                offset += Int64(packet.data[offset]) + 1
+            }
+            domains.append(domain)
+        }
+        return domains.toArray()
+    }
+
     func redirectDNSQuery(packet: IPPacket) {
         try {
             let udp = UdpSocket(bindAt: 0)
             udp.sendTimeout = Duration.second * 30
             udp.bind()
-            let payload = packet.updPayload()
-            udp.sendTo(SocketAddress(SocketAddressKind.IPv4, server, 53), payload)
+            let payload = packet.udpPayload()
+            udp.connect(SocketAddress(SocketAddressKind.IPv4, server, 53))
+            udp.send(payload)
             let buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
             let dataSize = udp.receive(buffer)
             if (dataSize <= buffer.size) {
                 udpStack.send(packet.destIP(), packet.udpDestPort(), packet.srcIP(), packet.udpSrcPort(),
                     buffer.slice(0, dataSize))
             }
+        } catch (e: Exception) {
+            Hilog.debug(0, "debugTun", "DNS Exception: ${e}")
         } finally {
             packet.release()
         }

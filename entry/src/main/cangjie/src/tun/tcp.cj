@@ -8,9 +8,10 @@ import ohos.hilog.Hilog
 extend IPPacket {
     func tcpSrcPort(): UInt16 {
         let headerOffset = headerLength()
-        return UInt16(data[headerOffset]) << 8 + UInt16(data[headerOffset + 1])
+        return (UInt16(data[headerOffset]) << 8) + UInt16(data[headerOffset + 1])
     }
 
+    @OverflowWrapping
     func setTcpSrcPort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset] = UInt8(port >> 8)
@@ -19,15 +20,17 @@ extend IPPacket {
 
     func tcpDestPort(): UInt16 {
         let headerOffset = headerLength()
-        return UInt16(data[headerOffset + 2]) << 8 + UInt16(data[headerOffset + 3])
+        return (UInt16(data[headerOffset + 2]) << 8) + UInt16(data[headerOffset + 3])
     }
 
+    @OverflowWrapping
     func setTcpDestPort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset + 2] = UInt8(port >> 8)
         data[headerOffset + 3] = UInt8(port)
     }
 
+    @OverflowWrapping
     func resumTcp() {
         let headerOffset = headerLength()
         data[headerOffset + 16] = 0
@@ -44,8 +47,8 @@ public class TcpStack <: IPProtocolStack {
     }
 
     public override func pop(packet: IPPacket) {
-        Hilog.debug(0, "debugTun",
-            "TCP: Size: ${packet.length()} From ${packet.srcIPString()} To ${packet.destIPString()}")
+        //Hilog.debug(0, "debugTun",
+        //    "TCP: Size: ${packet.length()} From ${packet.srcIPString()} To ${packet.destIPString()}")
         packet.release()
     }
 }
