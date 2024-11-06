@@ -14,10 +14,14 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
         stopVpn(runtime, callInfo)
     }
     let tunFd = Int32(callInfo[0].toNumber())
-    device = TunDevice(tunFd)
-    device?.register(TcpStack())
-    device?.register(UdpStack())
-    device?.start()
+    let pool = IPPacketPool(1000)
+    let dev = TunDevice(tunFd, pool)
+    let udpStack = UdpStack(dev, pool)
+    udpStack.register(DnsHandler(udpStack, [172, 19, 0, 2]))
+    dev.register(TcpStack())
+    dev.register(udpStack)
+    dev.start()
+    device = dev
     return runtime.undefined().toJSValue()
 }
 

@@ -10,6 +10,7 @@ import ohos.hilog.Hilog
 import std.sync.sleep
 import std.time.Duration
 import net.http.ClientBuilder
+import std.os.posix.write
 
 const IPPacketMaxSize = 1500
 
@@ -33,6 +34,11 @@ public class IPPacket {
         (Int64(data[2]) << 8) + Int64(data[3])
     }
 
+    func setLength(len: Int64) {
+        data[2] = UInt8(len >> 8)
+        data[3] = UInt8(len)
+    }
+
     func payload(): Array<UInt8> {
         let headerLen = headerLength()
         data.slice(headerLen, length() - headerLen)
@@ -42,33 +48,98 @@ public class IPPacket {
         data[9]
     }
 
+    func setProtocol(protocol: UInt8) {
+        data[9] = protocol
+    }
+
     func srcIP(): Array<UInt8> {
-        data.slice(12, 4)
+        data.slice(12, 4).clone()
     }
 
     func srcIPString(): String {
-        let ip = srcIP()
+        let ip = data.slice(12, 4)
         "${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]}"
+    }
+
+    func setSrcIP(newIP: Array<UInt8>) {
+        newIP.copyTo(data, 0, 12, 4)
     }
 
     func destIP(): Array<UInt8> {
-        data.slice(16, 4)
+        data.slice(16, 4).clone()
     }
 
     func destIPString(): String {
-        let ip = destIP()
+        let ip = data.slice(16, 4)
         "${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]}"
+    }
+
+    func setDestIP(newIP: Array<UInt8>) {
+        newIP.copyTo(data, 0, 16, 4)
+    }
+
+    func validateIPHeader(): Bool {
+        sum(data.slice(0, headerLength())) == 0xffff
+    }
+
+    func resetIPHeader() {
+        for (i in 0..20) {
+            data[i] = 0
+        }
+        data[0] = 0x45
+        data[3] = 20
+        data[6] = 0x40
+        data[8] = 255
+    }
+
+    func resumIPHeader() {
+        data[10] = 0
+        data[11] = 0
+        let result = sum(data.slice(0, headerLength()))
+        data[10] = UInt8(result >> 8)
+        data[11] = UInt8(result)
+    }
+
+    func sum(data: Array<UInt8>): UInt16 {
+        var result: UInt32 = 0
+        for (i in 0..data.size - 1 : 2) {
+            result += UInt32(data[i]) << 8 + UInt32(data[i + 1])
+        }
+        if (data.size % 2 == 1) {
+            result += UInt32(data[data.size - 1]) << 8
+        }
+        while ((result & 0xffff0000) != 0) {
+            result = result >> 16 + result & 0x0000ffff
+        }
+        return !UInt16(result)
+    }
+
+    func sumWithPseudoIPHeader(data: Array<UInt8>): UInt16 {
+        let pseudoHeader = Array<UInt8>(12, item: 0)
+        data.copyTo(pseudoHeader, 12, 0, 4)
+        data.copyTo(pseudoHeader, 16, 4, 4)
+        pseudoHeader[9] = data[9]
+        pseudoHeader[10] = UInt8(data.size >> 8)
+        pseudoHeader[11] = UInt8(data.size)
+        let pseudoHeaderSum = sum(pseudoHeader)
+        let dataSum = sum(data)
+        var result = UInt32(!pseudoHeaderSum) + UInt32(!dataSum)
+        while ((result & 0xffff0000) != 0) {
+            result = result >> 16 + result & 0x0000ffff
+        }
+        return !UInt16(result)
     }
 
     func release() {
         this.pool.packets.tryEnqueue(this)
+        return
     }
 }
 
-class IPPacketPool {
+public class IPPacketPool {
     let packets: BlockingQueue<IPPacket>
 
-    init(capacity: Int64) {
+    public init(capacity: Int64) {
         this.packets = BlockingQueue<IPPacket>(capacity)
     }
 
@@ -82,7 +153,7 @@ class IPPacketPool {
 
 public interface IPProtocolStack {
     func protocol(): UInt8
-    func pop(packet: IPPacket): Bool
+    func pop(packet: IPPacket): Unit
 }
 
 public class TunDevice {
@@ -90,11 +161,16 @@ public class TunDevice {
     let tunFd: Int32
     var runing: Bool = false
     let stacks = HashMap<UInt8, IPProtocolStack>()
-    var pool = IPPacketPool(1000)
+    var pool: IPPacketPool
     var reader: ?Future<Unit> = None
 
     public init(fd: Int32) {
+        this(fd, IPPacketPool(1000))
+    }
+
+    public init(fd: Int32, pool: IPPacketPool) {
         tunFd = fd
+        this.pool = pool
     }
 
     public func register(stack: IPProtocolStack) {
@@ -144,6 +220,18 @@ public class TunDevice {
                 }
             }
             LibC.free(buffer)
+        }
+    }
+
+    func writePacket(packet: IPPacket) {
+        unsafe {
+            var buffer = LibC.malloc<UInt8>(count: IPPacketMaxSize)
+            for (i in 0..packet.length()) {
+                buffer.write(i, packet.data[i])
+            }
+            let count = write(tunFd, buffer, UIntNative(packet.length()))
+            LibC.free(buffer)
+            return count
         }
     }
 }
