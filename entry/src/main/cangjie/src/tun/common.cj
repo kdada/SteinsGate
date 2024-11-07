@@ -7,6 +7,15 @@ import std.collection.concurrent.BlockingQueue
 
 const IPPacketMaxSize = 1500
 
+
+func exceptionToString(e: Exception): String {
+    var message = " Exception: ${e.message}\n"
+    for (trace in e.getStackTrace()) {
+    	message += "  ${trace.fileName}:${trace.lineNumber} ${trace.declaringClass}.${trace.methodName}\n"
+    }
+    return message
+}
+
 public struct IPPair <: Hashable & Equatable<IPPair> {
     var sourceIP: UInt32 = 0
     var sourcePort: UInt16 = 0
@@ -14,9 +23,9 @@ public struct IPPair <: Hashable & Equatable<IPPair> {
     var destinationPort: UInt16 = 0
 
     public init(fromIP: Array<UInt8>, fromPort: UInt16, toIP: Array<UInt8>, toPort: UInt16) {
-        sourceIP = UInt32(fromIP[0]) << 24 + UInt32(fromIP[1]) << 16 + UInt32(fromIP[2]) << 8 + UInt32(fromIP[3])
+        sourceIP = (UInt32(fromIP[0]) << 24) + (UInt32(fromIP[1]) << 16) + (UInt32(fromIP[2]) << 8) + UInt32(fromIP[3])
         sourcePort = fromPort
-        destinationIP = UInt32(toIP[0]) << 24 + UInt32(toIP[1]) << 16 + UInt32(toIP[2]) << 8 + UInt32(toIP[3])
+        destinationIP = (UInt32(toIP[0]) << 24) + (UInt32(toIP[1]) << 16) + (UInt32(toIP[2]) << 8) + UInt32(toIP[3])
         destinationPort = toPort
     }
 

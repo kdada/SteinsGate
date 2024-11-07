@@ -8,6 +8,7 @@ import std.os.posix.read
 import std.sync.sleep
 import std.time.Duration
 import std.os.posix.write
+import ohos.hilog.Hilog
 
 public interface IPProtocolStack {
     func protocol(): UInt8
@@ -52,9 +53,9 @@ public class TunDevice {
 
     private func readLoop() {
         unsafe {
-            try {
-                var buffer = LibC.malloc<UInt8>(count: IPPacketMaxSize)
-                while (running) {
+            var buffer = LibC.malloc<UInt8>(count: IPPacketMaxSize)
+            while (running) {
+                try {
                     let size = read(tunFd, buffer, UIntNative(IPPacketMaxSize))
 
                     if (size == -1) {
@@ -78,10 +79,11 @@ public class TunDevice {
                         case Some(stack) => stack.pop(packet)
                         case _ => packet.release()
                     }
+                } catch (e: Exception) {
+                    Hilog.error(0, "TunDevice", exceptionToString(e))
                 }
-                LibC.free(buffer)
-            } catch (e: Exception) {
             }
+            LibC.free(buffer)
         }
     }
 
