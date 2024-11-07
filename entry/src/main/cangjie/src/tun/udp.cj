@@ -10,25 +10,25 @@ import std.socket.*
 import std.time.Duration
 
 extend IPPacket {
-    func udpSrcPort(): UInt16 {
+    func udpSourcePort(): UInt16 {
         let headerOffset = headerLength()
         return (UInt16(data[headerOffset]) << 8) + UInt16(data[headerOffset + 1])
     }
 
     @OverflowWrapping
-    func setUdpSrcPort(port: UInt16) {
+    func setUdpSourcePort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset] = UInt8(port >> 8)
         data[headerOffset + 1] = UInt8(port)
     }
 
-    func udpDestPort(): UInt16 {
+    func udpDestinationPort(): UInt16 {
         let headerOffset = headerLength()
         return (UInt16(data[headerOffset + 2]) << 8) + UInt16(data[headerOffset + 3])
     }
 
     @OverflowWrapping
-    func setUdpDestPort(port: UInt16) {
+    func setUdpDestinationPort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset + 2] = UInt8(port >> 8)
         data[headerOffset + 3] = UInt8(port)
@@ -126,16 +126,17 @@ public class UdpStack <: IPProtocolStack {
         let packet = pool.getPacket()
         packet.resetIPHeader()
         packet.setProtocol(protocol())
-        packet.setSrcIP(fromIP)
-        packet.setUdpSrcPort(fromPort)
-        packet.setDestIP(toIP)
-        packet.setUdpDestPort(toPort)
+        packet.setSourceIP(fromIP)
+        packet.setUdpSourcePort(fromPort)
+        packet.setDestinationIP(toIP)
+        packet.setUdpDestinationPort(toPort)
         packet.setUdpLength(packet.udpHeaderLength() + payload.size)
-        packet.setLength(packet.headerLength() + packet.udpHeaderLength() + payload.size)
+        let packetLength = packet.headerLength() + packet.udpHeaderLength() + payload.size
+        packet.setLength(packetLength)
         packet.setUdpPayload(payload)
         packet.resumIPHeader()
         packet.resumUdp()
-        this.device.writePacket(packet)
+        this.device.write(packet.data.slice(0, packetLength))
         packet.release()
     }
 }
@@ -163,14 +164,14 @@ public class UdpDirectHandler <: UdpHandler {
             let udp = UdpSocket(bindAt: 0)
             udp.sendTimeout = Duration.second * 30
             udp.bind()
-            udp.connect(SocketAddress(SocketAddressKind.IPv4, packet.destIP(), packet.udpDestPort()))
+            udp.connect(SocketAddress(SocketAddressKind.IPv4, packet.destinationIP(), packet.udpDestinationPort()))
             let payload = packet.udpPayload()
             udp.send(payload)
             let buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
             let dataSize = udp.receive(buffer)
             if (dataSize <= buffer.size) {
-                udpStack.send(packet.destIP(), packet.udpDestPort(), packet.srcIP(), packet.udpSrcPort(),
-                    buffer.slice(0, dataSize))
+                udpStack.send(packet.destinationIP(), packet.udpDestinationPort(), packet.sourceIP(),
+                    packet.udpSourcePort(), buffer.slice(0, dataSize))
             }
         } catch (e: Exception) {
             Hilog.debug(0, "debugTun", "UDP Exception: ${e}")
@@ -190,7 +191,7 @@ public class DnsHandler <: UdpHandler {
     }
 
     public func canHandle(packet: IPPacket): Bool {
-        packet.udpDestPort() == 53
+        packet.udpDestinationPort() == 53
     }
 
     public func handle(packet: IPPacket): Unit {
@@ -228,8 +229,8 @@ public class DnsHandler <: UdpHandler {
             let buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
             let dataSize = udp.receive(buffer)
             if (dataSize <= buffer.size) {
-                udpStack.send(packet.destIP(), packet.udpDestPort(), packet.srcIP(), packet.udpSrcPort(),
-                    buffer.slice(0, dataSize))
+                udpStack.send(packet.destinationIP(), packet.udpDestinationPort(), packet.sourceIP(),
+                    packet.udpSourcePort(), buffer.slice(0, dataSize))
             }
         } catch (e: Exception) {
             Hilog.debug(0, "debugTun", "DNS Exception: ${e}")

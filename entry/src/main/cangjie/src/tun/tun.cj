@@ -52,29 +52,29 @@ public class IPPacket {
         data[9] = protocol
     }
 
-    func srcIP(): Array<UInt8> {
+    func sourceIP(): Array<UInt8> {
         data.slice(12, 4).clone()
     }
 
-    func srcIPString(): String {
+    func sourceIPString(): String {
         let ip = data.slice(12, 4)
         "${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]}"
     }
 
-    func setSrcIP(newIP: Array<UInt8>) {
+    func setSourceIP(newIP: Array<UInt8>) {
         newIP.copyTo(data, 0, 12, 4)
     }
 
-    func destIP(): Array<UInt8> {
+    func destinationIP(): Array<UInt8> {
         data.slice(16, 4).clone()
     }
 
-    func destIPString(): String {
+    func destinationIPString(): String {
         let ip = data.slice(16, 4)
         "${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]}"
     }
 
-    func setDestIP(newIP: Array<UInt8>) {
+    func setDestinationIP(newIP: Array<UInt8>) {
         newIP.copyTo(data, 0, 16, 4)
     }
 
@@ -230,13 +230,13 @@ public class TunDevice {
         }
     }
 
-    func writePacket(packet: IPPacket) {
+    func write(ipPacket: Array<UInt8>) {
         unsafe {
-            var buffer = LibC.malloc<UInt8>(count: IPPacketMaxSize)
-            for (i in 0..packet.length()) {
-                buffer.write(i, packet.data[i])
+            var buffer = LibC.malloc<UInt8>(count: ipPacket.size)
+            for (i in 0..ipPacket.size) {
+                buffer.write(i, ipPacket[i])
             }
-            let count = write(tunFd, buffer, UIntNative(packet.length()))
+            let count = write(tunFd, buffer, UIntNative(ipPacket.size))
             LibC.free(buffer)
             return count
         }

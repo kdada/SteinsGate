@@ -6,28 +6,49 @@ package ohos_app_cangjie_entry.tun
 import ohos.hilog.Hilog
 
 extend IPPacket {
-    func tcpSrcPort(): UInt16 {
+    func tcpSourcePort(): UInt16 {
         let headerOffset = headerLength()
         return (UInt16(data[headerOffset]) << 8) + UInt16(data[headerOffset + 1])
     }
 
     @OverflowWrapping
-    func setTcpSrcPort(port: UInt16) {
+    func setTcpSourcePort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset] = UInt8(port >> 8)
         data[headerOffset + 1] = UInt8(port)
     }
 
-    func tcpDestPort(): UInt16 {
+    func tcpDestinationPort(): UInt16 {
         let headerOffset = headerLength()
         return (UInt16(data[headerOffset + 2]) << 8) + UInt16(data[headerOffset + 3])
     }
 
     @OverflowWrapping
-    func setTcpDestPort(port: UInt16) {
+    func setTcpDestinationPort(port: UInt16) {
         let headerOffset = headerLength()
         data[headerOffset + 2] = UInt8(port >> 8)
         data[headerOffset + 3] = UInt8(port)
+    }
+
+    func tcpHeaderLength(): Int64 {
+        8
+    }
+
+    func tcpLength(): Int64 {
+        let headerOffset = headerLength()
+        return (Int64(data[headerOffset + 4]) << 8) + Int64(data[headerOffset + 5])
+    }
+
+    @OverflowWrapping
+    func setTcpLength(len: Int64) {
+        let headerOffset = headerLength()
+        data[headerOffset + 4] = UInt8(len >> 8)
+        data[headerOffset + 5] = UInt8(len)
+    }
+
+    func tcpPayload(): Array<UInt8> {
+        let headerLen = headerLength() + tcpHeaderLength()
+        data.slice(headerLen, length() - headerLen)
     }
 
     @OverflowWrapping
@@ -48,7 +69,7 @@ public class TcpStack <: IPProtocolStack {
 
     public override func pop(packet: IPPacket) {
         //Hilog.debug(0, "debugTun",
-        //    "TCP: Size: ${packet.length()} From ${packet.srcIPString()} To ${packet.destIPString()}")
+        //    "TCP: Size: ${packet.length()} From ${packet.sourceIPString()} To ${packet.destinationIPString()}")
         packet.release()
     }
 }
