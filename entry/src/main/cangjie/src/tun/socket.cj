@@ -13,6 +13,11 @@ public interface TunSocketManager {
     func close(socket: TunSocket): Unit
 }
 
+public interface TunSocketHandler {
+    func canHandle(socket: TunSocket): Bool
+    func handle(socket: TunSocket): Unit
+}
+
 public open class TunSocket {
     let manager: TunSocketManager
     let protocol: UInt8
@@ -45,7 +50,7 @@ public open class TunSocket {
         packets.tryEnqueue(packet)
     }
 
-    public func isClosed(): Bool {
+    public open func isClosed(): Bool {
         closed
     }
 
@@ -53,7 +58,7 @@ public open class TunSocket {
         -1
     }
 
-    public func write(data: Array<UInt8>): Int64 {
+    public open func write(data: Array<UInt8>): Int64 {
         if (closed) {
             return -1
         }
@@ -62,8 +67,16 @@ public open class TunSocket {
         return result
     }
 
-    public func close() {
+    public open func close() {
+        closed = true
         manager.close(this)
+        while (true) {
+            let socket = packets.tryDequeue()
+            if (socket.isNone()) {
+                break
+            }
+            socket.getOrThrow().release()
+        }
     }
 }
 
@@ -74,6 +87,9 @@ public class TunUdpSocket <: TunSocket {
     }
 
     public override func read(buffer: Array<UInt8>): Int64 {
+        if (closed) {
+            return -1
+        }
         var packet: ?IPPacket = None
         while (packet.isNone()) {
             packet = packets.dequeue(Duration.millisecond * 100)
@@ -84,6 +100,7 @@ public class TunUdpSocket <: TunSocket {
         let payload = packet.getOrThrow().udpPayload()
         let size = min(payload.size, buffer.size)
         payload.copyTo(buffer, 0, 0, size)
+        packet?.release()
         return size
     }
 }
@@ -98,6 +115,9 @@ public class TunTcpSocket <: TunSocket {
     }
 
     public override func read(buffer: Array<UInt8>): Int64 {
+        if (closed) {
+            return -1
+        }
         var readBytes = 0
         while (readBytes < buffer.size) {
             var packet: ?IPPacket = lastReadPacket
@@ -125,6 +145,9 @@ public class TunTcpSocket <: TunSocket {
                 lastReadPacket = packet
                 lastReadBytes = read
             } else {
+                if (packet.isSome()) {
+                    packet.getOrThrow().release()
+                }
                 lastReadPacket = None
                 lastReadBytes = 0
             }

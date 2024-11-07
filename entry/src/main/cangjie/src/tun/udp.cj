@@ -8,6 +8,7 @@ import std.collection.*
 import std.collection.concurrent.NonBlockingQueue
 import std.socket.*
 import std.time.Duration
+import std.collection.concurrent.ConcurrentHashMap
 
 extend IPPacket {
     func udpSourcePort(): UInt16 {
@@ -85,15 +86,11 @@ extend IPPacket {
     }
 }
 
-public interface UdpHandler {
-    func canHandle(packet: IPPacket): Bool
-    func handle(packet: IPPacket): Unit
-}
-
-public class UdpStack <: IPProtocolStack {
-    let handlers = ArrayList<UdpHandler>()
+public class UdpStack <: IPProtocolStack & TunSocketManager {
+    let handlers = ArrayList<TunSocketHandler>()
     let device: TunDevice
     let pool: IPPacketPool
+    let sockets = ConcurrentHashMap<IPPair, TunSocket>()
 
     public init(device: TunDevice, pool: IPPacketPool) {
         this.device = device
@@ -104,25 +101,40 @@ public class UdpStack <: IPProtocolStack {
         return 0x11
     }
 
-    public func register(handler: UdpHandler) {
+    public func register(handler: TunSocketHandler) {
         handlers.append(handler)
     }
 
     public override func pop(packet: IPPacket) {
-        var h: ?UdpHandler = None
-        for (handler in handlers) {
-            if (handler.canHandle(packet)) {
-                h = handler
-                break
+        let sourceIP = packet.sourceIP()
+        let sourcePort = packet.udpSourcePort()
+        let destinationIP = packet.destinationIP()
+        let destinationPort = packet.udpDestinationPort()
+        let pair = IPPair(sourceIP, sourcePort, destinationIP, destinationPort)
+        var socket = sockets.get(pair)
+        if (socket.isNone()) {
+            let socket = TunUdpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
+            var h: ?TunSocketHandler = None
+            for (handler in handlers) {
+                if (handler.canHandle(socket)) {
+                    h = handler
+                    break
+                }
             }
+            if (h.isSome()) {
+                socket.enqueue(packet)
+                sockets.put(pair, socket)
+                h.getOrThrow().handle(socket)
+            } else {
+                packet.release()
+            }
+        } else {
+            socket.getOrThrow().enqueue(packet)
         }
-        match (h) {
-            case Some(handler) => handler.handle(packet)
-            case _ => packet.release()
-        }
+        return
     }
 
-    public func send(fromIP: Array<UInt8>, fromPort: UInt16, toIP: Array<UInt8>, toPort: UInt16, payload: Array<UInt8>) {
+    private func send(fromIP: Array<UInt8>, fromPort: UInt16, toIP: Array<UInt8>, toPort: UInt16, payload: Array<UInt8>): Int64 {
         let packet = pool.getPacket()
         packet.resetIPHeader()
         packet.setProtocol(protocol())
@@ -136,67 +148,95 @@ public class UdpStack <: IPProtocolStack {
         packet.setUdpPayload(payload)
         packet.resumIPHeader()
         packet.resumUdp()
-        this.device.write(packet.data.slice(0, packetLength))
+        let count = this.device.write(packet.data.slice(0, packetLength))
         packet.release()
+        return count
+    }
+
+    public func send(socket: TunSocket, payload: Array<UInt8>): Int64 {
+        send(socket.destinationIP, socket.destinationPort, socket.sourceIP, socket.sourcePort, payload)
+    }
+
+    public func close(socket: TunSocket) {
+        // TODO
+        return
     }
 }
 
-public class UdpDirectHandler <: UdpHandler {
-    let udpStack: UdpStack
-
-    public init(stack: UdpStack) {
-        udpStack = stack
-    }
-
-    public func canHandle(packet: IPPacket): Bool {
+public class UdpDirectHandler <: TunSocketHandler {
+    public func canHandle(socket: TunSocket): Bool {
         true
     }
 
-    public func handle(packet: IPPacket): Unit {
+    public func handle(socket: TunSocket): Unit {
         spawn {
-            redirectUdp(packet)
+            redirectUdp(socket)
         }
         return
     }
 
-    func redirectUdp(packet: IPPacket) {
+    func redirectUdp(socket: TunSocket) {
         try {
             let udp = UdpSocket(bindAt: 0)
             udp.sendTimeout = Duration.second * 30
             udp.bind()
-            udp.connect(SocketAddress(SocketAddressKind.IPv4, packet.destinationIP(), packet.udpDestinationPort()))
-            let payload = packet.udpPayload()
-            udp.send(payload)
-            let buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
-            let dataSize = udp.receive(buffer)
-            if (dataSize <= buffer.size) {
-                udpStack.send(packet.destinationIP(), packet.udpDestinationPort(), packet.sourceIP(),
-                    packet.udpSourcePort(), buffer.slice(0, dataSize))
+            udp.connect(SocketAddress(SocketAddressKind.IPv4, socket.destinationIP, socket.destinationPort))
+
+            spawn {
+                try {
+                    var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+                    while (!socket.isClosed()) {
+                        let dataSize = udp.receive(buffer)
+                        if (dataSize <= buffer.size) {
+                            socket.write(buffer.slice(0, dataSize))
+                        }
+                    }
+                } catch (e: Exception) {
+                    Hilog.debug(0, "debugTun", "UDP Receive Exception: ${e}")
+                } finally {
+                    Hilog.debug(0, "debugTun",
+                        "UDP Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    )
+                    socket.close()
+                }
+            }
+
+            var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+            while (!socket.isClosed()) {
+                let count = socket.read(buffer)
+                if (count < 0) {
+                    break
+                }
+                if (count == 0) {
+                    continue
+                }
+                udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.debug(0, "debugTun", "UDP Exception: ${e}")
+            Hilog.debug(0, "debugTun", "UDP Send Exception: ${e}")
         } finally {
-            packet.release()
+            Hilog.debug(0, "debugTun",
+                "UDP Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            )
+            socket.close()
         }
     }
 }
 
-public class DnsHandler <: UdpHandler {
+public class DnsHandler <: TunSocketHandler {
     let server: Array<UInt8>
-    let udpStack: UdpStack
 
-    public init(stack: UdpStack, ip: Array<UInt8>) {
-        udpStack = stack
+    public init(ip: Array<UInt8>) {
         server = ip
     }
 
-    public func canHandle(packet: IPPacket): Bool {
-        packet.udpDestinationPort() == 53
+    public func canHandle(socket: TunSocket): Bool {
+        socket.destinationPort == 53
     }
 
-    public func handle(packet: IPPacket): Unit {
+    public func handle(socket: TunSocket): Unit {
         spawn {
-            redirectDNSQuery(packet)
+            redirectDNSQuery(socket)
         }
         return
     }
@@ -218,24 +258,50 @@ public class DnsHandler <: UdpHandler {
         return domains.toArray()
     }
 
-    func redirectDNSQuery(packet: IPPacket) {
+    func redirectDNSQuery(socket: TunSocket) {
         try {
             let udp = UdpSocket(bindAt: 0)
             udp.sendTimeout = Duration.second * 30
             udp.bind()
-            let payload = packet.udpPayload()
             udp.connect(SocketAddress(SocketAddressKind.IPv4, server, 53))
-            udp.send(payload)
-            let buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
-            let dataSize = udp.receive(buffer)
-            if (dataSize <= buffer.size) {
-                udpStack.send(packet.destinationIP(), packet.udpDestinationPort(), packet.sourceIP(),
-                    packet.udpSourcePort(), buffer.slice(0, dataSize))
+
+            spawn {
+                try {
+                    var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+                    while (!socket.isClosed()) {
+                        let dataSize = udp.receive(buffer)
+                        if (dataSize <= buffer.size) {
+                            socket.write(buffer.slice(0, dataSize))
+                        }
+                    }
+                } catch (e: Exception) {
+                    Hilog.debug(0, "debugTun", "DNS Receive Exception: ${e}")
+                } finally {
+                    Hilog.debug(0, "debugTun",
+                        "DNS Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    )
+                    socket.close()
+                }
+            }
+
+            var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+            while (!socket.isClosed()) {
+                let count = socket.read(buffer)
+                if (count < 0) {
+                    break
+                }
+                if (count == 0) {
+                    continue
+                }
+                udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.debug(0, "debugTun", "DNS Exception: ${e}")
+            Hilog.debug(0, "debugTun", "DNS Send Exception: ${e}")
         } finally {
-            packet.release()
+            Hilog.debug(0, "debugTun",
+                "DNS Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            )
+            socket.close()
         }
     }
 }
