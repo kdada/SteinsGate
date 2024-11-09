@@ -6,6 +6,7 @@ internal import ohos.ark_interop.JSCallInfo
 internal import ohos.ark_interop.JSValue
 internal import cj_res_entry.app
 import ohos_app_cangjie_entry.tun.*
+import std.socket.TcpSocket
 
 var device: ?TunDevice = None
 
@@ -16,11 +17,16 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     let tunFd = Int32(callInfo[0].toNumber())
     let pool = IPPacketPool(1000)
     let dev = TunDevice(tunFd, pool)
+
     let udpStack = UdpStack(dev, pool)
     udpStack.register(DnsHandler([114, 114, 114, 114]))
     udpStack.register(UdpDirectHandler())
-    dev.register(TcpStack())
     dev.register(udpStack)
+
+    let tcpStack = TcpStack(dev, pool)
+    tcpStack.register(TcpDirectHandler())
+    dev.register(tcpStack)
+
     dev.start()
     device = dev
     return runtime.undefined().toJSValue()
