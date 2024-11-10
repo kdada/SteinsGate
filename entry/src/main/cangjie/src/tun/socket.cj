@@ -9,6 +9,7 @@ import std.time.Duration
 import std.sync.sleep
 import std.time.DateTime
 import std.sync.ReentrantMutex
+import ohos.hilog.Hilog
 
 public interface TunSocketManager {
     func send(socket: TunSocket, payload: Array<UInt8>): Int64
@@ -28,6 +29,7 @@ public open class TunSocket {
     let destinationIP: Array<UInt8>
     let destinationPort: UInt16
     let packets: ArrayBlockingQueue<IPPacket>
+    var readClosed = false
     var closed = false
     var lastSentTimestamp = 0
     var lastReceivedTimestamp = 0
@@ -65,15 +67,7 @@ public open class TunSocket {
     }
 
     public open func close() {
-        closed = true
-        manager.close(this)
-        while (true) {
-            let socket = packets.tryDequeue()
-            if (socket.isNone()) {
-                break
-            }
-            socket.getOrThrow().release()
-        }
+        return
     }
 }
 
@@ -109,31 +103,49 @@ public class TunUdpSocket <: TunSocket {
         lastSentTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
         return result
     }
+
+    public override func close() {
+        closed = true
+        manager.close(this)
+        while (true) {
+            let socket = packets.tryDequeue()
+            if (socket.isNone()) {
+                break
+            }
+            socket.getOrThrow().release()
+        }
+    }
 }
 
-enum TcpServerState {
-    Init | SynReceived | Established | FinWait1 | FinWait2 | TimeWait | CloseWait | LastAck | Closed
-}
+type TcpServerState = UInt8
+
+const Unknown: TcpServerState = 0
+const SocketInit: TcpServerState = Unknown + 1
+const SynReceived: TcpServerState = SocketInit + 1
+const Established: TcpServerState = SocketInit + 2
+const FinWait1: TcpServerState = SocketInit + 3
+const FinWait2: TcpServerState = SocketInit + 4
+const TimeWait: TcpServerState = SocketInit + 5
+const CloseWait: TcpServerState = SocketInit + 6
+const LastAck: TcpServerState = SocketInit + 7
+const Closed: TcpServerState = SocketInit + 8
 
 public class TunTcpSocket <: TunSocket {
     let mutex: ReentrantMutex = ReentrantMutex()
     var lastReadPacket: ?IPPacket = None
     var lastReadBytes: Int64 = 0
-    var internalState: TcpServerState = Init
+    var internalState: TcpServerState = SocketInit
     var closedTimestamp = 0
     mut prop state: TcpServerState {
         get() {
-            Init
+            internalState
         }
         set(v) {
             internalState = v
-            match (v) {
-                case CloseWait | FinWait1 => {
-                    => if (closedTimestamp == 0) {
-                        closedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
-                    }
+            if (v == CloseWait || v == FinWait1) {
+                if (closedTimestamp == 0) {
+                    closedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
                 }
-                case _ => {=>}
             }
         }
     }
@@ -168,15 +180,18 @@ public class TunTcpSocket <: TunSocket {
                     }
                     while (packet.isNone()) {
                         packet = packets.dequeue(Duration.millisecond * 100)
-                        if (packet.isNone() && closed) {
+                        if (packet.isNone() && readClosed) {
                             return -1
                         }
                     }
                 }
             }
             let payload = packet.getOrThrow().tcpPayload()
+
             let bytesToCopy = min(buffer.size - readBytes, payload.size - read)
-            payload.copyTo(buffer, readBytes, read, bytesToCopy)
+            //Hilog.debug(0, "TcpDirectHandler",
+            //    "TCP read ${buffer.size}:${readBytes} == ${payload.size}:${read} = ${bytesToCopy}")
+            payload.copyTo(buffer, read, readBytes, bytesToCopy)
             readBytes += bytesToCopy
             read += bytesToCopy
             if (read < payload.size) {
@@ -201,7 +216,7 @@ public class TunTcpSocket <: TunSocket {
         var remainingDataSize = data.size
         while (remainingDataSize > 0 && !closed) {
             let remainingRemoteWindow = Int64(remoteWindow) - Int64(localSequenceNumber + 1 - sentSequenceNumber)
-            let minPayloadSize = 1400
+            let minPayloadSize = tcpMaxPayloadSize
             if (remainingRemoteWindow >= remainingDataSize || remainingRemoteWindow >= minPayloadSize) {
                 let payload = data.slice(data.size - remainingDataSize, min(remainingDataSize, minPayloadSize))
                 manager.send(this, payload)
@@ -212,5 +227,10 @@ public class TunTcpSocket <: TunSocket {
             }
         }
         return data.size - remainingDataSize
+    }
+
+    public override func close() {
+        closed = true
+        manager.close(this)
     }
 }

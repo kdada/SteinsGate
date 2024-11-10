@@ -177,6 +177,7 @@ extend IPPacket {
 }
 
 const tcpSessionTimeout = 30
+const tcpMaxPayloadSize = 1400
 
 public class TcpStack <: IPProtocolStack & TunSocketManager {
     let handlers = ArrayList<TunSocketHandler>()
@@ -193,7 +194,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                 let outdatedSockets = ArrayList<TunTcpSocket>()
                 let now = DateTime.now().toUnixTimeStamp().toSeconds()
                 for ((_, socket) in sockets) {
-                    if (now - socket.closedTimestamp > tcpSessionTimeout) {
+                    if (socket.isClosed()) {
                         outdatedSockets.append(socket)
                     }
                 }
@@ -202,9 +203,9 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                     if (sockets.get(key).isSome()) {
                         sockets.remove(key)
                     }
-                    Hilog.debug(0, "TcpStack",
-                        "Close outdated tcp socket ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                    )
+                    //Hilog.debug(0, "TcpStack",
+                    //    "Close outdated tcp socket ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
                 }
             }
         }
@@ -225,7 +226,12 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         let destinationIP = packet.destinationIP()
         let destinationPort = packet.udpDestinationPort()
         let pair = IPPair(sourceIP, sourcePort, destinationIP, destinationPort)
-
+        //Hilog.debug(0, "TcpDirectHandler",
+        //    "TCP recv packet ${sourceIP}:${sourcePort} -> ${destinationIP}:${destinationPort}" +
+        //    " length: ${packet.length()} payload: ${packet.length() - packet.headerLength() - packet.tcpHeaderLength()}" +
+        //    " seq: ${packet.tcpSequenceNumber()} ack: ${packet.tcpAcknowledgementNumber()} window: ${packet.tcpWindow()}" +
+        //    " flag(ACK<RST<SYN<FIN): ${packet.tcpFlagACK()} ${packet.tcpFlagRST()} ${packet.tcpFlagSYN()} ${packet.tcpFlagFIN()}"
+        //)
         var socket = sockets.get(pair)
         if (socket.isNone()) {
             let socket = TunTcpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
@@ -241,7 +247,11 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                 sockets.put(pair, socket)
                 let handler = h.getOrThrow()
                 spawn {
-                    establishConnection(socket, handler)
+                    try {
+                        establishConnection(socket, handler)
+                    } catch (e: Exception) {
+                        Hilog.error(0, "TcpStack", exceptionToString(e))
+                    }
                 }
             } else {
                 packet.release()
@@ -249,82 +259,106 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         } else {
             let socket = socket.getOrThrow()
             let payload = packet.tcpPayload()
-
-            var seqLength = UInt32(payload.size)
-            if (seqLength == 0) {
-                seqLength = 1
-            }
-
-            if ((packet.tcpSequenceNumber() - socket.remoteSequenceNumber) == seqLength) {
-                socket.remoteSequenceNumber = packet.tcpSequenceNumber()
-            }
-            if (packet.tcpFlagACK()) {
-                let min = UInt64(socket.sentSequenceNumber)
-                var max = UInt64(socket.localSequenceNumber) + 1
-                if (max < min) {
-                    max += UInt64(2 ** 32)
+            if (packet.tcpSequenceNumber() == socket.remoteSequenceNumber) {
+                if (packet.tcpFlagACK()) {
+                    let min = UInt64(socket.sentSequenceNumber)
+                    var max = UInt64(socket.localSequenceNumber) + 1
+                    if (max < min) {
+                        max += UInt64(2 ** 32)
+                    }
+                    var ack = UInt64(packet.tcpAcknowledgementNumber())
+                    var ack2 = ack + UInt64(2 ** 32)
+                    if ((ack > min && ack <= max) || (ack2 > min && ack2 <= max)) {
+                        socket.sentSequenceNumber = packet.tcpAcknowledgementNumber()
+                        socket.remoteWindow = packet.tcpWindow()
+                    }
                 }
-                var ack = UInt64(packet.tcpAcknowledgementNumber())
-                var ack2 = ack + UInt64(2 ** 32)
-                if ((ack > min && ack <= max) || (ack2 > min && ack2 <= max)) {
-                    socket.sentSequenceNumber = packet.tcpAcknowledgementNumber()
-                    socket.remoteWindow = packet.tcpWindow()
+
+                if (socket.state < Established) {
+                    socket.enqueue(packet)
+                } else if (payload.size > 0 && socket.state == Established) {
+                    if (socket.enqueue(packet)) {
+                        socket.remoteSequenceNumber += UInt32(payload.size)
+                        sendSync(
+                            socket,
+                            packetModifier: {
+                                packet =>
+                                packet.setTcpFlagACK(true)
+                                packet.resumTcp()
+                            }
+                        )
+                    } else {
+                        packet.release()
+                    }
+                } else {
+                    handleControlPacket(socket, packet)
                 }
-            }
-            if (payload.size > 0) {
-                sendAck(socket)
-                socket.enqueue(packet)
-            } else {
-                handleControlPacket(socket, packet)
             }
         }
         return
     }
 
     private func establishConnection(socket: TunTcpSocket, handler: TunSocketHandler) {
-        while (true) {
+        //Hilog.debug(0, "TcpDirectHandler",
+        //    "TCP start connection ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+        //)
+        while (socket.state < Established) {
             let p = socket.packets.dequeue(Duration.second * tcpSessionTimeout)
             if (p.isNone()) {
                 resetConnection(socket)
                 break
             }
             let packet = p.getOrThrow()
-            let success = match (socket.state) {
-                case Init => {
-                    => if (packet.tcpFlagSYN()) {
-                        socket.state = SynReceived
-                        socket.remoteSequenceNumber = packet.tcpSequenceNumber()
-                        socket.remoteWindow = packet.tcpWindow()
-                        let random = Random(UInt64(socket.remoteSequenceNumber))
-                        socket.localSequenceNumber = random.nextUInt32() / 2
-                        socket.sentSequenceNumber = socket.localSequenceNumber
-                        let ackPacket = createTcpPacket(socket)
-                        ackPacket.setTcpFlagSYN(true)
-                        ackPacket.setTcpFlagACK(true)
-                        ackPacket.resumTcp()
-                        this.device.write(ackPacket.data.slice(0, ackPacket.length()))
-                        ackPacket.release()
-                        true
-                    } else {
-                        false
-                    }
+            var success = false
+            if (socket.state == SocketInit) {
+                if (packet.tcpFlagSYN()) {
+                    socket.state = SynReceived
+                    socket.remoteSequenceNumber = packet.tcpSequenceNumber() + 1
+                    socket.remoteWindow = packet.tcpWindow()
+                    let random = Random(UInt64(socket.remoteSequenceNumber))
+                    socket.localSequenceNumber = random.nextUInt32() / 2
+                    socket.sentSequenceNumber = socket.localSequenceNumber
+                    sendSync(
+                        socket,
+                        packetModifier: {
+                            packet =>
+                            packet.setTcpFlagSYN(true)
+                            packet.setTcpFlagACK(true)
+                            packet.resumTcp()
+                        }
+                    )
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP SocketInit -> SynReceived ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
+                    packet.release()
+                    success = true
                 }
-                case SynReceived => {
-                    => if (packet.tcpFlagACK() && packet.tcpAcknowledgementNumber() == (socket.localSequenceNumber + 1)) {
-                        socket.state = Established
-                        socket.remoteSequenceNumber = packet.tcpSequenceNumber()
-                        socket.remoteWindow = packet.tcpWindow()
-                        socket.sentSequenceNumber = packet.tcpAcknowledgementNumber()
-                        handler.handle(socket)
-                        true
+            } else if (socket.state == SynReceived) {
+                if (packet.tcpFlagACK() && packet.tcpAcknowledgementNumber() == socket.localSequenceNumber + 1) {
+                    socket.state = Established
+                    socket.remoteSequenceNumber = packet.tcpSequenceNumber()
+                    socket.remoteWindow = packet.tcpWindow()
+                    socket.localSequenceNumber++
+                    socket.sentSequenceNumber = packet.tcpAcknowledgementNumber()
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP SynReceived -> Established ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
+
+                    if ((packet.length() - packet.headerLength() - packet.tcpHeaderLength()) > 0) {
+                        socket.lastReadPacket = packet
+                        socket.lastReadBytes = 0
                     } else {
-                        false
+                        packet.release()
                     }
+                    handler.handle(socket)
+                    success = true
                 }
-                case _ => {=> false}
-            }()
-            packet.release()
+            }
             if (!success) {
+                //Hilog.debug(0, "TcpDirectHandler",
+                //    "TCP reset ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                //)
+                packet.release()
                 resetConnection(socket)
                 break
             }
@@ -334,57 +368,89 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
     @OverflowWrapping
     private func handleControlPacket(socket: TunTcpSocket, packet: IPPacket) {
         if (packet.tcpFlagFIN() || packet.tcpFlagACK()) {
-            match (socket.state) {
-                case Establish => {
-                    => if (packet.tcpFlagFIN()) {
-                        socket.state = CloseWait
-                        sendAck(socket)
-                    }
-                }
-                case LastAck => {
-                    => if (packet.tcpFlagACK()) {
-                        if ((socket.sentSequenceNumber - socket.localSequenceNumber) == 1) {
-                            socket.state = Closed
+            var payloadSize = packet.length() - packet.headerLength() - packet.tcpHeaderLength()
+            if (payloadSize <= 0) {
+                payloadSize = 1
+            }
+            if (socket.state == Established) {
+                if (packet.tcpFlagFIN()) {
+                    socket.state = CloseWait
+                    socket.remoteSequenceNumber += UInt32(payloadSize)
+                    sendSync(
+                        socket,
+                        packetModifier: {
+                            packet =>
+                            packet.setTcpFlagACK(true)
+                            packet.resumTcp()
                         }
-                    }
+                    )
+                    socket.readClosed = true
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP Establish -> CloseWait ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
                 }
-                case FinWait1 => {
-                    =>
-                    if (packet.tcpFlagACK()) {
-                        if ((socket.sentSequenceNumber - socket.localSequenceNumber) == 1) {
-                            socket.state = FinWait2
+            } else if (socket.state == LastAck) {
+                if (packet.tcpFlagACK()) {
+                    if ((socket.sentSequenceNumber - socket.localSequenceNumber) == 1) {
+                        socket.state = Closed
+                    }
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP LastAck -> Closed ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
+                }
+            } else if (socket.state == FinWait1) {
+                if (packet.tcpFlagACK()) {
+                    if ((socket.sentSequenceNumber - socket.localSequenceNumber) == 1) {
+                        socket.state = FinWait2
+                    }
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP FinWait1 -> FinWait2 ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
+                }
+                if (packet.tcpFlagFIN()) {
+                    socket.state = TimeWait
+                    socket.remoteSequenceNumber += UInt32(payloadSize)
+                    sendSync(
+                        socket,
+                        packetModifier: {
+                            packet =>
+                            packet.setTcpFlagACK(true)
+                            packet.resumTcp()
                         }
-                    }
-                    if (packet.tcpFlagFIN()) {
-                        socket.state = TimeWait
-                        sendAck(socket)
-                    }
+                    )
+                    socket.readClosed = true
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP FinWait1 -> TimeWait ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
                 }
-                case FinWait2 => {
-                    => if (packet.tcpFlagFIN()) {
-                        socket.state = TimeWait
-                        sendAck(socket)
-                    }
+            } else if (socket.state == FinWait2) {
+                if (packet.tcpFlagFIN()) {
+                    socket.state = TimeWait
+                    socket.remoteSequenceNumber += UInt32(payloadSize)
+                    sendSync(
+                        socket,
+                        packetModifier: {
+                            packet =>
+                            packet.setTcpFlagACK(true)
+                            packet.resumTcp()
+                        }
+                    )
+                    socket.readClosed = true
+                    //Hilog.debug(0, "TcpDirectHandler",
+                    //    "TCP FinWait2 -> TimeWait ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                    //)
                 }
-                case _ => {=>}
-            }()
-            packet.release()
+            }
+            if (payloadSize > 0) {
+                socket.enqueue(packet)
+            } else {
+                packet.release()
+            }
             return
         }
         packet.release()
         resetConnection(socket)
         return
-    }
-
-    private func sendAck(socket: TunTcpSocket) {
-        sendSync(
-            (socket as TunTcpSocket).getOrThrow(),
-            packetModifier: {
-                packet =>
-                packet.setTcpFlagACK(true)
-                packet.resumTcp()
-            }
-        )
     }
 
     @OverflowWrapping
@@ -397,15 +463,13 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         packet.setTcpSourcePort(socket.destinationPort)
         packet.setDestinationIP(socket.sourceIP)
         packet.setTcpDestinationPort(socket.sourcePort)
-        packet.setTcpAcknowledgementNumber(socket.remoteSequenceNumber + 1)
+        packet.setTcpAcknowledgementNumber(socket.remoteSequenceNumber)
         packet.setTcpWindow(socket.remainingWindowSize())
+        packet.setTcpSequenceNumber(socket.localSequenceNumber)
         if (payload.size > 0) {
             socket.localSequenceNumber += UInt32(payload.size)
             packet.setTcpPayload(payload)
-        } else {
-            socket.localSequenceNumber++
         }
-        packet.setTcpSequenceNumber(socket.localSequenceNumber)
         let packetLength = packet.headerLength() + packet.tcpHeaderLength() + payload.size
         packet.setLength(packetLength)
         packet.resumIPHeader()
@@ -436,6 +500,13 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
             packetModifier(packet)
             let count = this.device.write(packet.data.slice(0, packet.length()))
             packet.release()
+            //Hilog.debug(0, "TcpDirectHandler",
+            //    "TCP send packet ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort}" +
+            //    " state: ${socket.state} localseq: ${socket.localSequenceNumber}" +
+            //    " length: ${packet.length()} payload: ${packet.length() - packet.headerLength() - packet.tcpHeaderLength()}" +
+            //    " seq: ${packet.tcpSequenceNumber()} ack: ${packet.tcpAcknowledgementNumber()} window: ${packet.tcpWindow()}" +
+            //    " flag(ACK<RST<SYN<FIN): ${packet.tcpFlagACK()} ${packet.tcpFlagRST()} ${packet.tcpFlagSYN()} ${packet.tcpFlagFIN()}"
+            //)
             return count
         }
     }
@@ -454,33 +525,33 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
 
     public func close(socket: TunSocket) {
         let tcpSocket = (socket as TunTcpSocket).getOrThrow()
-        match (tcpSocket.state) {
-            case Establish => {
-                =>
-                tcpSocket.state = FinWait1
-                sendSync(
-                    (socket as TunTcpSocket).getOrThrow(),
-                    packetModifier: {
-                        packet =>
-                        packet.setTcpFlagFIN(true)
-                        packet.resumTcp()
-                    }
-                )
-            }
-            case CloseWait => {
-                =>
-                tcpSocket.state = LastAck
-                sendSync(
-                    (socket as TunTcpSocket).getOrThrow(),
-                    packetModifier: {
-                        packet =>
-                        packet.setTcpFlagFIN(true)
-                        packet.resumTcp()
-                    }
-                )
-            }
-            case _ => {=> 0}
-        }()
+        if (tcpSocket.state == Established) {
+            tcpSocket.state = FinWait1
+            sendSync(
+                (socket as TunTcpSocket).getOrThrow(),
+                packetModifier: {
+                    packet =>
+                    packet.setTcpFlagFIN(true)
+                    packet.resumTcp()
+                }
+            )
+        //Hilog.debug(0, "TcpDirectHandler",
+        //    "TCP Establish -> FinWait1 ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+        //)
+        } else if (tcpSocket.state == CloseWait) {
+            tcpSocket.state = LastAck
+            sendSync(
+                (socket as TunTcpSocket).getOrThrow(),
+                packetModifier: {
+                    packet =>
+                    packet.setTcpFlagFIN(true)
+                    packet.resumTcp()
+                }
+            )
+            //Hilog.debug(0, "TcpDirectHandler",
+            //    "TCP CloseWait -> LastAck ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            //)
+        }
         return
     }
 }
@@ -506,12 +577,9 @@ public class TcpDirectHandler <: TunSocketHandler {
 
             spawn {
                 try {
-                    var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+                    var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
                     while (!socket.isClosed() && !tcp.isClosed()) {
                         let dataSize = tcp.read(buffer)
-                        //Hilog.debug(0, "UdpDirectHandler",
-                        //    "Receive udp data ${dataSize} ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                        //)
                         if (dataSize < 0) {
                             break
                         }
@@ -531,7 +599,7 @@ public class TcpDirectHandler <: TunSocketHandler {
                 }
             }
 
-            var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
+            var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
             while (!socket.isClosed() && !tcp.isClosed()) {
                 let count = socket.read(buffer)
                 if (count < 0) {
@@ -540,9 +608,6 @@ public class TcpDirectHandler <: TunSocketHandler {
                 if (count == 0) {
                     continue
                 }
-                //Hilog.debug(0, "UdpDirectHandler",
-                //    "Read udp req ${count} ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                //)
                 tcp.write(buffer.slice(0, count))
             }
         } catch (e: Exception) {
@@ -551,7 +616,6 @@ public class TcpDirectHandler <: TunSocketHandler {
             Hilog.debug(0, "TcpDirectHandler",
                 "TCP Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
-            socket.close()
             tcp.close()
         }
     }

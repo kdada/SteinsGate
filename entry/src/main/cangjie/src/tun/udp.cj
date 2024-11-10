@@ -206,9 +206,6 @@ public class UdpDirectHandler <: TunSocketHandler {
                     var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
                     while (!socket.isClosed() && !udp.isClosed()) {
                         let dataSize = udp.receive(buffer)
-                        //Hilog.debug(0, "UdpDirectHandler",
-                        //    "Receive udp data ${dataSize} ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                        //)
                         if (dataSize < 0) {
                             break
                         }
@@ -237,9 +234,6 @@ public class UdpDirectHandler <: TunSocketHandler {
                 if (count == 0) {
                     continue
                 }
-                //Hilog.debug(0, "UdpDirectHandler",
-                //    "Read udp req ${count} ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                //)
                 udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
@@ -306,9 +300,6 @@ public class DnsHandler <: TunSocketHandler {
                     var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
                     while (!socket.isClosed()) {
                         let dataSize = udp.receive(buffer)
-                        //Hilog.debug(0, "DnsHandler",
-                        //    "Receive dns data ${dataSize} ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                        //)
                         if (dataSize < 0) {
                             break
                         }
@@ -337,9 +328,6 @@ public class DnsHandler <: TunSocketHandler {
                 if (count == 0) {
                     continue
                 }
-                //Hilog.debug(0, "DnsHandler",
-                //    "Read dns req ${count} ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-                //)
                 udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
