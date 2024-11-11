@@ -237,7 +237,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
             let socket = TunTcpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
             var h: ?TunSocketHandler = None
             for (handler in handlers) {
-                if (handler.canHandle(socket)) {
+                if (handler.canAccept(socket)) {
                     h = handler
                     break
                 }
@@ -350,7 +350,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                     } else {
                         packet.release()
                     }
-                    handler.handle(socket)
+                    handler.accept(socket)
                     success = true
                 }
             }
@@ -556,12 +556,8 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
     }
 }
 
-public class TcpDirectHandler <: TunSocketHandler {
-    public func canHandle(socket: TunSocket): Bool {
-        true
-    }
-
-    public func handle(socket: TunSocket): Unit {
+public class TcpDirectListener <: TunSocketListener {
+    public func accept(socket: TunSocket): Unit {
         spawn {
             redirectTcp(socket)
         }
@@ -589,10 +585,10 @@ public class TcpDirectHandler <: TunSocketHandler {
                         socket.write(buffer.slice(0, dataSize))
                     }
                 } catch (e: Exception) {
-                    Hilog.error(0, "TcpDirectHandler",
+                    Hilog.error(0, "TcpDirectListener",
                         "Receive ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
                 } finally {
-                    Hilog.debug(0, "TcpDirectHandler",
+                    Hilog.debug(0, "TcpDirectListener",
                         "TCP Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                     )
                     socket.close()
@@ -611,9 +607,9 @@ public class TcpDirectHandler <: TunSocketHandler {
                 tcp.write(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, "TcpDirectHandler", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+            Hilog.error(0, "TcpDirectListener", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
         } finally {
-            Hilog.debug(0, "TcpDirectHandler",
+            Hilog.debug(0, "TcpDirectListener",
                 "TCP Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
             tcp.close()

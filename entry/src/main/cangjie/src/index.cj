@@ -19,12 +19,12 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     let dev = TunDevice(tunFd, pool)
 
     let udpStack = UdpStack(dev, pool)
-    udpStack.register(DnsHandler([114, 114, 114, 114]))
-    udpStack.register(UdpDirectHandler())
+    udpStack.register(CustomTunSocketHandler(OnlyDNSRequest(), DnsDirectListener([114, 114, 114, 114])))
+    udpStack.register(CustomTunSocketHandler(All(), UdpDirectListener()))
     dev.register(udpStack)
 
     let tcpStack = TcpStack(dev, pool)
-    tcpStack.register(TcpDirectHandler())
+    tcpStack.register(CustomTunSocketHandler(All(), TcpDirectListener()))
     dev.register(tcpStack)
 
     dev.start()

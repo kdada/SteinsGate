@@ -129,7 +129,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
             let socket = TunUdpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
             var h: ?TunSocketHandler = None
             for (handler in handlers) {
-                if (handler.canHandle(socket)) {
+                if (handler.canAccept(socket)) {
                     h = handler
                     break
                 }
@@ -137,7 +137,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
             if (h.isSome()) {
                 socket.enqueue(packet)
                 sockets.put(pair, socket)
-                h.getOrThrow().handle(socket)
+                h.getOrThrow().accept(socket)
             } else {
                 packet.release()
             }
@@ -182,12 +182,8 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
     }
 }
 
-public class UdpDirectHandler <: TunSocketHandler {
-    public func canHandle(socket: TunSocket): Bool {
-        true
-    }
-
-    public func handle(socket: TunSocket): Unit {
+public class UdpDirectListener <: TunSocketListener {
+    public func accept(socket: TunSocket): Unit {
         spawn {
             redirectUdp(socket)
         }
@@ -215,10 +211,10 @@ public class UdpDirectHandler <: TunSocketHandler {
                         socket.write(buffer.slice(0, dataSize))
                     }
                 } catch (e: Exception) {
-                    Hilog.error(0, "UdpDirectHandler",
+                    Hilog.error(0, "UdpDirectListener",
                         "Receive ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
                 } finally {
-                    Hilog.debug(0, "UdpDirectHandler",
+                    Hilog.debug(0, "UdpDirectListener",
                         "UDP Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                     )
                     socket.close()
@@ -237,9 +233,9 @@ public class UdpDirectHandler <: TunSocketHandler {
                 udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, "UdpDirectHandler", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+            Hilog.error(0, "UdpDirectListener", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
         } finally {
-            Hilog.debug(0, "UdpDirectHandler",
+            Hilog.debug(0, "UdpDirectListener",
                 "UDP Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
             socket.close()
@@ -248,18 +244,24 @@ public class UdpDirectHandler <: TunSocketHandler {
     }
 }
 
-public class DnsHandler <: TunSocketHandler {
+public class OnlyDNSRequest <: TunSocketChecker {
+    public func canAccept(socket: TunSocket): Bool {
+        socket.destinationPort == 53
+    }
+}
+
+public class DnsDirectListener <: TunSocketListener {
     let server: Array<UInt8>
 
     public init(ip: Array<UInt8>) {
         server = ip
     }
 
-    public func canHandle(socket: TunSocket): Bool {
+    public func canAccept(socket: TunSocket): Bool {
         socket.destinationPort == 53
     }
 
-    public func handle(socket: TunSocket): Unit {
+    public func accept(socket: TunSocket): Unit {
         spawn {
             redirectDNSQuery(socket)
         }
@@ -309,10 +311,10 @@ public class DnsHandler <: TunSocketHandler {
                         socket.write(buffer.slice(0, dataSize))
                     }
                 } catch (e: Exception) {
-                    Hilog.error(0, "DnsHandler",
+                    Hilog.error(0, "DnsDirectListener",
                         "Receive ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
                 } finally {
-                    Hilog.debug(0, "DnsHandler",
+                    Hilog.debug(0, "DnsDirectListener",
                         "DNS Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                     )
                     socket.close()
@@ -331,9 +333,9 @@ public class DnsHandler <: TunSocketHandler {
                 udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, "DnsHandler", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+            Hilog.error(0, "DnsDirectListener", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
         } finally {
-            Hilog.debug(0, "DnsHandler",
+            Hilog.debug(0, "DnsDirectListener",
                 "DNS Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
             socket.close()

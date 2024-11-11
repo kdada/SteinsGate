@@ -10,15 +10,108 @@ import std.sync.sleep
 import std.time.DateTime
 import std.sync.ReentrantMutex
 import ohos.hilog.Hilog
+import std.convert.*
+import std.collection.*
 
 public interface TunSocketManager {
     func send(socket: TunSocket, payload: Array<UInt8>): Int64
     func close(socket: TunSocket): Unit
 }
 
-public interface TunSocketHandler {
-    func canHandle(socket: TunSocket): Bool
-    func handle(socket: TunSocket): Unit
+public interface TunSocketChecker {
+    func canAccept(socket: TunSocket): Bool
+}
+
+public interface TunSocketListener {
+    func accept(socket: TunSocket): Unit
+}
+
+public interface TunSocketHandler <: TunSocketChecker & TunSocketListener {}
+
+public class CustomTunSocketHandler <: TunSocketHandler {
+    public CustomTunSocketHandler(let checker: TunSocketChecker, let listener: TunSocketListener) {}
+
+    public func canAccept(socket: TunSocket): Bool {
+        return checker.canAccept(socket)
+    }
+    public func accept(socket: TunSocket): Unit {
+        return listener.accept(socket)
+    }
+}
+
+public class All <: TunSocketChecker {
+    public func canAccept(socket: TunSocket): Bool {
+        return true
+    }
+}
+
+public class Not <: TunSocketChecker {
+    Not(let checker: TunSocketChecker) {}
+
+    public func canAccept(socket: TunSocket): Bool {
+        !checker.canAccept(socket)
+    }
+}
+
+struct IPMask {
+    IPMask(let ip: UInt32, let mask: UInt32) {}
+}
+
+public class InAddresses <: TunSocketChecker {
+    let ips = Array<ArrayList<IPMask>>(256, item: ArrayList<IPMask>())
+
+    public init(addresses: String) {
+        let addressArray = addresses.split("\n", removeEmpty: true)
+        for (address in addressArray) {
+            let ipmask = address.split("/", removeEmpty: true)
+            if (ipmask.size != 2) {
+                continue
+            }
+            let ipParts = ipmask[0].split(".", removeEmpty: true)
+            if (ipParts.size != 4) {
+                continue
+            }
+
+            let mask = UInt8.tryParse(ipmask[1])
+            if (mask.isNone()) {
+                continue
+            }
+            let m = mask.getOrThrow()
+            if (m < 8 || m > 24) {
+                continue
+            }
+
+            var ip: UInt32 = 0
+            var parsed = true
+            for (part in ipParts) {
+                var p = UInt8.tryParse(part)
+                if (p.isNone()) {
+                    parsed = false
+                    break
+                }
+                ip = (ip << 8) + UInt32(p.getOrThrow())
+            }
+            if (!parsed) {
+                continue
+            }
+            var bmask = UInt32(0)
+            for (_ in 0..m) {
+                bmask = (bmask >> 1) | 0x80000000
+            }
+            ips[Int64(ip >> 24)].append(IPMask(ip, bmask))
+        }
+    }
+
+    public func canAccept(socket: TunSocket): Bool {
+        let toIP = socket.destinationIP
+        let destinationIP = (UInt32(toIP[0]) << 24) + (UInt32(toIP[1]) << 16) + (UInt32(toIP[2]) << 8) + UInt32(toIP[3])
+        for (ipMask in ips[Int64(toIP[0])]) {
+            if ((destinationIP & ipMask.mask) == ipMask.ip) {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 public open class TunSocket {
