@@ -268,28 +268,6 @@ public class DnsDirectListener <: TunSocketListener {
         return
     }
 
-    func dnsQuestionCount(payload: Array<UInt8>): Int64 {
-        return (Int64(payload[4]) << 8) + Int64(payload[5])
-    }
-
-    func getRequestDomains(payload: Array<UInt8>): Array<String> {
-        let domains = ArrayList<String>()
-        let count = dnsQuestionCount(payload)
-        var offset = 12
-        for (record in 0..count) {
-            var domain = ""
-            while (payload[offset] != 0) {
-                for (i in 0..payload[offset]) {
-                    domain += "${Rune(payload[offset + 1 + Int64(i)])}"
-                }
-                domain += "."
-                offset += Int64(payload[offset]) + 1
-            }
-            domains.append(domain)
-        }
-        return domains.toArray()
-    }
-
     func redirectDNSQuery(socket: TunSocket) {
         let udp = UdpSocket(bindAt: 0)
         try {

@@ -114,6 +114,78 @@ public class InAddresses <: TunSocketChecker {
     }
 }
 
+public class InDomains <: TunSocketChecker {
+    let domains = HashMap<String, Any>()
+
+    public init(domainList: String) {
+        let domainArray = domainList.split("\n", removeEmpty: true)
+        for (domain in domainArray) {
+            let parts = domain.split(".", removeEmpty: true)
+            var inMap = domains
+            for (index in (parts.size - 1)..=0) {
+                let result = inMap.get(parts[index])
+                if (result.isNone()) {
+                    let nextLevel = HashMap<String, Any>()
+                    inMap.put(parts[index], nextLevel)
+                    inMap = nextLevel
+                } else {
+                    inMap = (result.getOrThrow() as HashMap<String, Any>).getOrThrow()
+                }
+            }
+            inMap.put("", true)
+        }
+    }
+
+    func dnsQuestionCount(payload: Array<UInt8>): Int64 {
+        return (Int64(payload[4]) << 8) + Int64(payload[5])
+    }
+
+    func getRequestDomains(payload: Array<UInt8>): Array<String> {
+        let domains = ArrayList<String>()
+        let count = dnsQuestionCount(payload)
+        var offset = 12
+        for (record in 0..count) {
+            var domain = ""
+            while (payload[offset] != 0) {
+                for (i in 0..payload[offset]) {
+                    domain += "${Rune(payload[offset + 1 + Int64(i)])}"
+                }
+                domain += "."
+                offset += Int64(payload[offset]) + 1
+            }
+            domains.append(domain)
+        }
+        return domains.toArray()
+    }
+
+    public func canAccept(socket: TunSocket): Bool {
+        if (socket.destinationPort != 53) {
+            return false
+        }
+        let packet = socket.packets.head()
+        if (packet.isNone()) {
+            return false
+        }
+        let payload = packet.getOrThrow().udpPayload()
+        let requestDomains = getRequestDomains(payload)
+        for (domain in requestDomains) {
+            let parts = domain.split(".", removeEmpty: true)
+            var inMap = domains
+            for (index in (parts.size - 1)..=0) {
+                let result = inMap.get(parts[index])
+                if (result.isNone()) {
+                    break
+                }
+                inMap = (result.getOrThrow() as HashMap<String, Any>).getOrThrow()
+            }
+            if (inMap.get("").isSome()) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
 public open class TunSocket {
     let manager: TunSocketManager
     let protocol: UInt8
