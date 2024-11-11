@@ -3,6 +3,7 @@
  */
 package ohos_app_cangjie_entry.tun
 
+import std.collection.ArrayList
 import std.socket.*
 import encoding.hex.fromHexString
 import std.time.*
@@ -12,6 +13,13 @@ import std.binary.*
 import std.random.Random
 import std.math.*
 import ohos.hilog.Hilog
+import ohos.crypto.createSymKeyGenerator
+import ohos.crypto.createMac
+import ohos.crypto.createCipher
+import ohos.crypto.DataBlob
+import ohos.crypto.CryptoMode
+import ohos.crypto.GcmParamsSpec
+import ohos.crypto.IvParamsSpec
 
 public class VmessConnection {
     let id: Array<UInt8>
@@ -38,7 +46,11 @@ public class VmessConnection {
 
     public init(userId: String, server: String, port: UInt16) {
         id = fromHexString(userId.replace("-", "")).getOrThrow()
-        appendId = fromHexString("c48619fe-8f02-49e0-b9e9-edf763e17e21".replace("-", "")).getOrThrow()
+        let chars = ArrayList<UInt8>()
+        for (char in "c48619fe-8f02-49e0-b9e9-edf763e17e21") {
+            chars.append(char)
+        }
+        appendId = chars.toArray()
         serverAddress = SocketAddress(server, port)
         socket = TcpSocket(serverAddress)
     }
@@ -64,16 +76,23 @@ public class VmessConnection {
 
     func writeRequestHeader() {
         let buffer = Array<UInt8>(
-            1 /*Ver*/ + 16 /*IV*/ + 16 /*Key*/ + 1 /*V*/ + 1 /*Opt*/ + 1 /*P+Sec*/ + 1 /*Reserved*/ + 1 /*Cmd*/ + 2 /*Port*/ + 1 /*T*/ + 4 /*A*/ + 4 /*F*/ ,
+            16 /*Auth*/ + 1 /*Ver*/ + 16 /*IV*/ + 16 /*Key*/ + 1 /*V*/ + 1 /*Opt*/ + 1 /*P+Sec*/ + 1 /*Reserved*/ + 1 /*Cmd*/ + 2 /*Port*/ + 1 /*T*/ + 4 /*A*/ + 4 /*F*/ ,
             item: 0
         )
         var offset = 0
-        /*Ver*/ buffer[offset] = 1
-
-        offset += 1
         let timestamp = DateTime.now().toUnixTimeStamp().toSeconds()
         let timestampBuffer = Array<UInt8>(8, item: 0)
         timestamp.writeBigEndian(timestampBuffer)
+        let hmacKey = createSymKeyGenerator("HMAC").convertKey(DataBlob(id))
+        let hmac = createMac("MD5")
+        hmac.`init`(hmacKey)
+        hmac.update(DataBlob(timestampBuffer))
+        /*Auth*/ hmac.doFinal().data.copyTo(buffer, 0, offset, 16)
+
+        offset += 16
+        /*Ver*/ buffer[offset] = 1
+
+        offset += 1
         let md5IV = MD5()
         md5IV.write(timestampBuffer)
         md5IV.write(timestampBuffer)
@@ -117,7 +136,13 @@ public class VmessConnection {
         /*A*/ address.copyTo(buffer, 0, offset, 4)
         /*F*/ fnv32a(buffer.slice(0, buffer.size - 4)).copyTo(buffer, 0, offset, 4)
 
-        // TODO AES-128-CFB for buffer
+        let symKeyGenerator = createSymKeyGenerator("AES128")
+        let key = symKeyGenerator.convertKey(DataBlob(requestKey))
+        let params = IvParamsSpec("AES128", DataBlob(requestIV))
+        let cipher = createCipher("AES128|CFB|NoPadding")
+        cipher.`init`(CryptoMode.ENCRYPT_MODE, key, params)
+        cipher.update(DataBlob(buffer.slice(16, buffer.size - 16)))
+        cipher.doFinal(None).data.copyTo(buffer, 0, 16, buffer.size - 16)
 
         socket.write(buffer)
         requestHeaderWrote = true
@@ -130,7 +155,13 @@ public class VmessConnection {
             return -1
         }
 
-        // TODO AES-128-CFB for buffer
+        let symKeyGenerator = createSymKeyGenerator("AES128")
+        let key = symKeyGenerator.convertKey(DataBlob(responseKey))
+        let params = IvParamsSpec("AES128", DataBlob(responseIV))
+        let cipher = createCipher("AES128|CFB|NoPadding")
+        cipher.`init`(CryptoMode.DECRYPT_MODE, key, params)
+        cipher.update(DataBlob(buffer))
+        cipher.doFinal(None).data.copyTo(buffer, 0, 0, 4)
 
         if ( /*V*/ buffer[0] != v) {
             return -1
@@ -159,17 +190,27 @@ public class VmessConnection {
         var sentSize = 0
         while (sentSize < payload.size) {
             var bodyLength = payload.size - sentSize
-            if (bodyLength > 65000) {
-                bodyLength = 65000
+            if (bodyLength > 64992) {
+                bodyLength = 64992
             }
-            let size = UInt16(bodyLength)
-            var buffer = Array<UInt8>(2 + bodyLength + 16, item: 0)
+
+            let symKeyGenerator = createSymKeyGenerator("AES128")
+            let key = symKeyGenerator.convertKey(DataBlob(requestKey))
+            let newIV = Array<UInt8>(12, item: 0)
+            requestCount.writeBigEndian(newIV)
+            requestIV.copyTo(newIV, 3, 2, 10)
+            let params = GcmParamsSpec("AES128", DataBlob(newIV), DataBlob(), DataBlob(Array<UInt8>(16, item: 0)))
+            let cipher = createCipher("AES128|GCM|PKCS7")
+            cipher.`init`(CryptoMode.ENCRYPT_MODE, key, params)
+            let encryptedData = cipher.update(DataBlob(payload.slice(sentSize, bodyLength)))
+            let gcmData = cipher.doFinal(None)
+
+            var buffer = Array<UInt8>(2, item: 0)
+            let size = UInt16(encryptedData.data.size) + UInt16(gcmData.data.size)
             size.writeBigEndian(buffer)
-            payload.copyTo(buffer, sentSize, 2, bodyLength)
-
-            // TODO AES-128-GCM for buffer
-
             socket.write(buffer)
+            socket.write(encryptedData.data)
+            socket.write(gcmData.data)
             sentSize += bodyLength
             requestCount++
         }
@@ -190,14 +231,26 @@ public class VmessConnection {
             let length = UInt16.readBigEndian(lengthBuffer)
             let buffer = Array<UInt8>(Int64(length), item: 0)
             var readSize = 0
-            while (readSize < payload.size) {
-                let count = socket.read(payload.slice(readSize, payload.size - readSize))
+            while (readSize < buffer.size) {
+                let count = socket.read(buffer.slice(readSize, buffer.size - readSize))
                 readSize += count
             }
 
-            // TODO AES-128-GCM for buffer
+            let symKeyGenerator = createSymKeyGenerator("AES128")
+            let key = symKeyGenerator.convertKey(DataBlob(requestKey))
+            let newIV = Array<UInt8>(12, item: 0)
+            requestCount.writeBigEndian(newIV)
+            requestIV.copyTo(newIV, 3, 2, 10)
+            let params = GcmParamsSpec("AES128", DataBlob(newIV), DataBlob(), DataBlob(buffer.slice(buffer.size-16, 16)))
+            let cipher = createCipher("AES128|GCM|PKCS7")
+            cipher.`init`(CryptoMode.DECRYPT_MODE, key, params)
+            let decryptedData = cipher.update(DataBlob(buffer.slice(0, buffer.size-16)))
+            let gcmData = cipher.doFinal(None)
+            if (gcmData.data.size == 0) {
+            	return -1
+            }
 
-            responseRemainingBuffer = buffer.slice(0, buffer.size - 16)
+            responseRemainingBuffer = decryptedData.data
         }
 
         let copyLength = min(responseRemainingBuffer.size, payload.size)
@@ -257,7 +310,6 @@ public class VmessProxyListener <: TunSocketListener {
                     socket.close()
                 }
             }
-
 
             vmess.setHeader(socket.protocol, socket.destinationIP, socket.destinationPort)
             var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
