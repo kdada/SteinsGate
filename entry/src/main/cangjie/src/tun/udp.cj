@@ -100,7 +100,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
                     }
                 }
                 for (socket in outdatedSockets) {
-                	socket.close()
+                    socket.close()
                     Hilog.debug(0, "UdpStack",
                         "Close outdated udp socket ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                     )
@@ -110,7 +110,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
     }
 
     public override func protocol(): UInt8 {
-        return 0x11
+        return ProtocolUdp
     }
 
     public func register(handler: TunSocketHandler) {
@@ -129,7 +129,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
             let socket = TunUdpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
             var h: ?TunSocketHandler = None
             for (handler in handlers) {
-                if (handler.canAccept(socket)) {
+                if (handler.canAccept(socket, packet)) {
                     h = handler
                     break
                 }
@@ -245,7 +245,7 @@ public class UdpDirectListener <: TunSocketListener {
 }
 
 public class OnlyDNSRequest <: TunSocketChecker {
-    public func canAccept(socket: TunSocket): Bool {
+    public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
         socket.destinationPort == 53
     }
 }

@@ -216,7 +216,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
     }
 
     public override func protocol(): UInt8 {
-        return 0x6
+        return ProtocolTcp
     }
 
     @OverflowWrapping
@@ -235,26 +235,14 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         var socket = sockets.get(pair)
         if (socket.isNone()) {
             let socket = TunTcpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
-            var h: ?TunSocketHandler = None
-            for (handler in handlers) {
-                if (handler.canAccept(socket)) {
-                    h = handler
-                    break
+            socket.enqueue(packet)
+            sockets.put(pair, socket)
+            spawn {
+                try {
+                    establishConnection(socket)
+                } catch (e: Exception) {
+                    Hilog.error(0, "TcpStack", exceptionToString(e))
                 }
-            }
-            if (h.isSome()) {
-                socket.enqueue(packet)
-                sockets.put(pair, socket)
-                let handler = h.getOrThrow()
-                spawn {
-                    try {
-                        establishConnection(socket, handler)
-                    } catch (e: Exception) {
-                        Hilog.error(0, "TcpStack", exceptionToString(e))
-                    }
-                }
-            } else {
-                packet.release()
             }
         } else {
             let socket = socket.getOrThrow()
@@ -298,11 +286,11 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         return
     }
 
-    private func establishConnection(socket: TunTcpSocket, handler: TunSocketHandler) {
+    private func establishConnection(socket: TunTcpSocket) {
         //Hilog.debug(0, "TcpDirectHandler",
         //    "TCP start connection ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
         //)
-        while (socket.state < Established) {
+        while (socket.state <= Established) {
             let p = socket.packets.dequeue(Duration.second * tcpSessionTimeout)
             if (p.isNone()) {
                 resetConnection(socket)
@@ -347,11 +335,40 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                     if ((packet.length() - packet.headerLength() - packet.tcpHeaderLength()) > 0) {
                         socket.lastReadPacket = packet
                         socket.lastReadBytes = 0
+                        var h: ?TunSocketHandler = None
+                        for (handler in handlers) {
+                            if (handler.canAccept(socket, packet)) {
+                                h = handler
+                                break
+                            }
+                        }
+                        if (h.isSome()) {
+                            h.getOrThrow().accept(socket)
+                            break
+                        }
                     } else {
                         packet.release()
+                        success = true
                     }
-                    handler.accept(socket)
-                    success = true
+                }
+            } else if (socket.state == Established) {
+                if ((packet.length() - packet.headerLength() - packet.tcpHeaderLength()) > 0) {
+                    socket.lastReadPacket = packet
+                    socket.lastReadBytes = 0
+                    var h: ?TunSocketHandler = None
+                    for (handler in handlers) {
+                        if (handler.canAccept(socket, packet)) {
+                            h = handler
+                            break
+                        }
+                    }
+                    if (h.isSome()) {
+                        h.getOrThrow().accept(socket)
+                        break
+                    } else {
+                        packet.release()
+                        success = true
+                    }
                 }
             }
             if (!success) {

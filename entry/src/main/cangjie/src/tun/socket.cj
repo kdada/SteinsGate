@@ -19,7 +19,7 @@ public interface TunSocketManager {
 }
 
 public interface TunSocketChecker {
-    func canAccept(socket: TunSocket): Bool
+    func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool
 }
 
 public interface TunSocketListener {
@@ -31,8 +31,8 @@ public interface TunSocketHandler <: TunSocketChecker & TunSocketListener {}
 public class CustomTunSocketHandler <: TunSocketHandler {
     public CustomTunSocketHandler(let checker: TunSocketChecker, let listener: TunSocketListener) {}
 
-    public func canAccept(socket: TunSocket): Bool {
-        return checker.canAccept(socket)
+    public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
+        return checker.canAccept(socket, firstDataPacket)
     }
     public func accept(socket: TunSocket): Unit {
         return listener.accept(socket)
@@ -40,7 +40,7 @@ public class CustomTunSocketHandler <: TunSocketHandler {
 }
 
 public class All <: TunSocketChecker {
-    public func canAccept(socket: TunSocket): Bool {
+    public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
         return true
     }
 }
@@ -48,8 +48,8 @@ public class All <: TunSocketChecker {
 public class Not <: TunSocketChecker {
     Not(let checker: TunSocketChecker) {}
 
-    public func canAccept(socket: TunSocket): Bool {
-        !checker.canAccept(socket)
+    public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
+        !checker.canAccept(socket, firstDataPacket)
     }
 }
 
@@ -102,7 +102,7 @@ public class InAddresses <: TunSocketChecker {
         }
     }
 
-    public func canAccept(socket: TunSocket): Bool {
+    public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
         let toIP = socket.destinationIP
         let destinationIP = (UInt32(toIP[0]) << 24) + (UInt32(toIP[1]) << 16) + (UInt32(toIP[2]) << 8) + UInt32(toIP[3])
         for (ipMask in ips[Int64(toIP[0])]) {
@@ -122,7 +122,7 @@ public class InDomains <: TunSocketChecker {
         for (domain in domainArray) {
             let parts = domain.split(".", removeEmpty: true)
             var inMap = domains
-            for (index in (parts.size - 1)..=0) {
+            for (index in (parts.size - 1)..=0 : -1) {
                 let result = inMap.get(parts[index])
                 if (result.isNone()) {
                     let nextLevel = HashMap<String, Any>()
@@ -158,20 +158,15 @@ public class InDomains <: TunSocketChecker {
         return domains.toArray()
     }
 
-    public func canAccept(socket: TunSocket): Bool {
-        if (socket.destinationPort != 53) {
+    public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
+        if (socket.protocol != ProtocolUdp || socket.destinationPort != 53) {
             return false
         }
-        let packet = socket.packets.head()
-        if (packet.isNone()) {
-            return false
-        }
-        let payload = packet.getOrThrow().udpPayload()
-        let requestDomains = getRequestDomains(payload)
+        let requestDomains = getRequestDomains(firstDataPacket.udpPayload())
         for (domain in requestDomains) {
             let parts = domain.split(".", removeEmpty: true)
             var inMap = domains
-            for (index in (parts.size - 1)..=0) {
+            for (index in (parts.size - 1)..=0 : -1) {
                 let result = inMap.get(parts[index])
                 if (result.isNone()) {
                     break
@@ -239,7 +234,7 @@ public open class TunSocket {
 public class TunUdpSocket <: TunSocket {
     init(manager: TunSocketManager, sourceIP: Array<UInt8>, sourcePort: UInt16, destinationIP: Array<UInt8>,
         destinationPort: UInt16, packetBufferSize!: Int64 = 100) {
-        super(manager, 0x11, sourceIP, sourcePort, destinationIP, destinationPort, packetBufferSize: packetBufferSize)
+        super(manager, ProtocolUdp, sourceIP, sourcePort, destinationIP, destinationPort, packetBufferSize: packetBufferSize)
     }
 
     public override func read(buffer: Array<UInt8>): Int64 {
@@ -321,7 +316,7 @@ public class TunTcpSocket <: TunSocket {
 
     init(manager: TunSocketManager, sourceIP: Array<UInt8>, sourcePort: UInt16, destinationIP: Array<UInt8>,
         destinationPort: UInt16, packetBufferSize!: Int64 = 100) {
-        super(manager, 0x6, sourceIP, sourcePort, destinationIP, destinationPort, packetBufferSize: packetBufferSize)
+        super(manager, ProtocolTcp, sourceIP, sourcePort, destinationIP, destinationPort, packetBufferSize: packetBufferSize)
     }
 
     func remainingWindowSize(): UInt16 {

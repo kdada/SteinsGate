@@ -6,12 +6,13 @@ package ohos_app_cangjie_entry.tun
 import std.collection.concurrent.BlockingQueue
 
 const IPPacketMaxSize = 1500
-
+const ProtocolTcp: UInt8 = 0x6
+const ProtocolUdp: UInt8 = 0x11
 
 func exceptionToString(e: Exception): String {
     var message = " Exception: ${e.message}\n"
     for (trace in e.getStackTrace()) {
-    	message += "  ${trace.fileName}:${trace.lineNumber} ${trace.declaringClass}.${trace.methodName}\n"
+        message += "  ${trace.fileName}:${trace.lineNumber} ${trace.declaringClass}.${trace.methodName}\n"
     }
     return message
 }
