@@ -16,7 +16,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
     let handlers = ArrayList<TunSocketHandler>()
     let device: TunDevice
     let pool: IPPacketPool
-    let sockets = ConcurrentHashMap<IPPair, TunSocket>()
+    let sockets = ConcurrentHashMap<IPPair, TunUdpSocket>()
     var closed = false
     let packets: BlockingQueue<IPPacket>
     let routines = Array<?Future<Unit>>(2, item: None)

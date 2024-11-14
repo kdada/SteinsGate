@@ -192,29 +192,18 @@ public open class TunSocket {
     let sourcePort: UInt16
     let destinationIP: Array<UInt8>
     let destinationPort: UInt16
-    let packets: BlockingQueue<IPPacket>
     var closed = false
     var lastSentTimestamp = 0
     var lastReceivedTimestamp = 0
 
     init(manager: TunSocketManager, protocol: UInt8, sourceIP: Array<UInt8>, sourcePort: UInt16,
-        destinationIP: Array<UInt8>, destinationPort: UInt16, packetBufferSize!: Int64 = 100) {
+        destinationIP: Array<UInt8>, destinationPort: UInt16) {
         this.manager = manager
         this.protocol = protocol
         this.sourceIP = sourceIP
         this.sourcePort = sourcePort
         this.destinationIP = destinationIP
         this.destinationPort = destinationPort
-        this.packets = BlockingQueue<IPPacket>(packetBufferSize)
-    }
-
-    func remainingBufferCount(): Int64 {
-        packets.capacity - packets.size
-    }
-
-    func enqueue(packet: IPPacket): Bool {
-        lastReceivedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
-        packets.tryEnqueue(packet)
     }
 
     public func isClosed(): Bool {
@@ -235,9 +224,17 @@ public open class TunSocket {
 }
 
 public class TunUdpSocket <: TunSocket {
+    let packets: BlockingQueue<IPPacket>
+
     init(manager: TunSocketManager, sourceIP: Array<UInt8>, sourcePort: UInt16, destinationIP: Array<UInt8>,
         destinationPort: UInt16, packetBufferSize!: Int64 = 100) {
-        super(manager, ProtocolUdp, sourceIP, sourcePort, destinationIP, destinationPort, packetBufferSize: packetBufferSize)
+        super(manager, ProtocolUdp, sourceIP, sourcePort, destinationIP, destinationPort)
+        this.packets = BlockingQueue<IPPacket>(packetBufferSize)
+    }
+
+    func enqueue(packet: IPPacket): Bool {
+        lastReceivedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
+        packets.tryEnqueue(packet)
     }
 
     public override func read(buffer: Array<UInt8>): Int64 {
@@ -269,8 +266,168 @@ public class TunUdpSocket <: TunSocket {
 
     public override func close() {
         if (closed) {
-        	return
+            return
         }
+        closed = true
+        manager.terminate(this)
+    }
+}
+
+type TcpServerState = UInt8
+
+const Unknown: TcpServerState = 0
+const SocketInit: TcpServerState = Unknown + 1
+const SynReceived: TcpServerState = SocketInit + 1
+const Established: TcpServerState = SocketInit + 2
+const FinWait1: TcpServerState = SocketInit + 3
+const FinWait2: TcpServerState = SocketInit + 4
+const TimeWait: TcpServerState = SocketInit + 5
+const CloseWait: TcpServerState = SocketInit + 6
+const LastAck: TcpServerState = SocketInit + 7
+const Closed: TcpServerState = SocketInit + 8
+
+public class TunTcpSocket <: TunSocket {
+    let readMutex = ReentrantMutex()
+    let readBuffer: Array<UInt8>
+    var startIndexOfReadableData: Int64 = 0
+    var readableDataSize: Int64 = 0
+
+    let writeMutex = ReentrantMutex()
+    var remoteNextSequenceNumber: UInt32 = 0
+    var remoteWindowSize: UInt16 = 0
+    let sentPackets = ArrayList<IPPacket>()
+    var localAcknowledgementNumber: UInt32 = 0
+    var localNextSequenceNumber: UInt32 = 0
+
+    var readClosed = false
+    var internalState: TcpServerState = SocketInit
+    var closedTimestamp = 0
+    mut prop state: TcpServerState {
+        get() {
+            internalState
+        }
+        set(v) {
+            internalState = v
+            if (v == CloseWait || v == FinWait1) {
+                if (closedTimestamp == 0) {
+                    closedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
+                }
+            }
+            if (v == TimeWait || v == TimeWait) {
+                readClosed = true
+            }
+        }
+    }
+
+    init(manager: TunSocketManager, sourceIP: Array<UInt8>, sourcePort: UInt16, destinationIP: Array<UInt8>,
+        destinationPort: UInt16, readBufferSize!: Int64 = 65535) {
+        super(manager, ProtocolTcp, sourceIP, sourcePort, destinationIP, destinationPort)
+        readBuffer = Array<UInt8>(readBufferSize, item: 0)
+    }
+
+    func getLocalRemainingWindowSize(): UInt16 {
+        readMutex.lock()
+        let remainingSize = readBuffer.size - readableDataSize
+        readMutex.unlock()
+        if (remainingSize > 65535) {
+            return 65535
+        }
+        return UInt16(remainingSize)
+    }
+
+    func getRemoteRemainingWindowSize(): UInt16 {
+        writeMutex.lock()
+        let remainingSize = Int64(remoteWindowSize) -
+            (Int64(localNextSequenceNumber) + Int64(UInt32.Max) - Int64(localAcknowledgementNumber)) % Int64(UInt32.Max)
+        writeMutex.unlock()
+        if (remainingSize > 65535) {
+            return 65535
+        }
+        if (remainingSize < 0) {
+            return 0
+        }
+        return UInt16(remainingSize)
+    }
+
+    func setLocalNumber(remoteWindowSize: UInt16, acknowledgementNumber: UInt32) {
+        writeMutex.lock()
+        this.remoteWindowSize = remoteWindowSize
+        localAcknowledgementNumber = acknowledgementNumber
+        writeMutex.unlock()
+    }
+
+    @OverflowWrapping
+    func offloadPayload(payload: Array<UInt8>) {
+        if (readClosed) {
+            return
+        }
+        lastReceivedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
+        try {
+            readMutex.lock()
+            let remainingSize = readBuffer.size - readableDataSize
+            if (payload.size > remainingSize) {
+                return
+            }
+            let payloadIndex = startIndexOfReadableData + readableDataSize
+            let copiedSize = min(payload.size, readBuffer.size - payloadIndex)
+            payload.copyTo(readBuffer, 0, payloadIndex, copiedSize)
+            if (copiedSize < payload.size) {
+                payload.copyTo(readBuffer, copiedSize, 0, payload.size - copiedSize)
+            }
+            readableDataSize += payload.size
+        } finally {
+            readMutex.unlock()
+        }
+    }
+
+    @OverflowWrapping
+    public override func read(buffer: Array<UInt8>): Int64 {
+        while (true) {
+            if (readableDataSize > 0) {
+                readMutex.lock()
+                let sizeToCopy = min(buffer.size, readableDataSize)
+                let copiedSize = min(sizeToCopy, readBuffer.size - startIndexOfReadableData)
+                readBuffer.copyTo(buffer, startIndexOfReadableData, 0, copiedSize)
+                if (copiedSize < sizeToCopy) {
+                    readBuffer.copyTo(buffer, 0, copiedSize, sizeToCopy - copiedSize)
+                }
+                startIndexOfReadableData = (startIndexOfReadableData + sizeToCopy) % readBuffer.size
+                readableDataSize -= sizeToCopy
+                return sizeToCopy
+                readMutex.unlock()
+            }
+            if (readClosed) {
+                return -1
+            }
+            sleep(Duration.millisecond * 10)
+        }
+        return -1
+    }
+
+    @OverflowWrapping
+    public override func write(payload: Array<UInt8>): Int64 {
+        if (closed) {
+            return -1
+        }
+        var remainingDataSize = payload.size
+        while (remainingDataSize > 0 && !closed) {
+            let remainingWindowSize = Int64(getRemoteRemainingWindowSize())
+            if (remainingWindowSize <= 0) {
+                sleep(Duration.millisecond * 10)
+                continue
+            }
+            let dataSize = min(remainingDataSize, remainingWindowSize)
+            let sentDataSize = manager.send(this, payload.slice(payload.size - remainingDataSize, dataSize))
+            if (sentDataSize <= 0) {
+                return sentDataSize
+            }
+            remainingDataSize -= sentDataSize
+            lastSentTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
+        }
+        return payload.size - remainingDataSize
+    }
+
+    public override func close() {
         closed = true
         manager.terminate(this)
     }
