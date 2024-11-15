@@ -293,11 +293,16 @@ public class TunTcpSocket <: TunSocket {
     var readableDataSize: Int64 = 0
 
     let writeMutex = ReentrantMutex()
+    let writeBuffer: Array<UInt8>
+    var startIndexOfWritableData: Int64 = 0
+    var writableDataSize: Int64 = 0
     var remoteNextSequenceNumber: UInt32 = 0
+    var remoteAcknowledgementNumber: UInt32 = 0
     var remoteWindowSize: UInt16 = 0
-    let sentPackets = ArrayList<IPPacket>()
     var localAcknowledgementNumber: UInt32 = 0
+    var localAcknowledgementNumberAckCounter = 0
     var localNextSequenceNumber: UInt32 = 0
+    var sentLocalWindowSize: UInt16 = 0
 
     var readClosed = false
     var internalState: TcpServerState = SocketInit
@@ -313,24 +318,25 @@ public class TunTcpSocket <: TunSocket {
                     closedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
                 }
             }
-            if (v == TimeWait || v == TimeWait) {
+            if (v == CloseWait || v == TimeWait) {
                 readClosed = true
             }
         }
     }
 
     init(manager: TunSocketManager, sourceIP: Array<UInt8>, sourcePort: UInt16, destinationIP: Array<UInt8>,
-        destinationPort: UInt16, readBufferSize!: Int64 = 65535) {
+        destinationPort: UInt16, readBufferSize!: Int64 = Int64(UInt16.Max), writeBufferSize!: Int64 = Int64(UInt16.Max)) {
         super(manager, ProtocolTcp, sourceIP, sourcePort, destinationIP, destinationPort)
         readBuffer = Array<UInt8>(readBufferSize, item: 0)
+        writeBuffer = Array<UInt8>(writeBufferSize, item: 0)
     }
 
     func getLocalRemainingWindowSize(): UInt16 {
         readMutex.lock()
         let remainingSize = readBuffer.size - readableDataSize
         readMutex.unlock()
-        if (remainingSize > 65535) {
-            return 65535
+        if (remainingSize > Int64(UInt16.Max)) {
+            return UInt16.Max
         }
         return UInt16(remainingSize)
     }
@@ -340,8 +346,8 @@ public class TunTcpSocket <: TunSocket {
         let remainingSize = Int64(remoteWindowSize) -
             (Int64(localNextSequenceNumber) + Int64(UInt32.Max) - Int64(localAcknowledgementNumber)) % Int64(UInt32.Max)
         writeMutex.unlock()
-        if (remainingSize > 65535) {
-            return 65535
+        if (remainingSize > Int64(UInt16.Max)) {
+            return UInt16.Max
         }
         if (remainingSize < 0) {
             return 0
@@ -349,32 +355,40 @@ public class TunTcpSocket <: TunSocket {
         return UInt16(remainingSize)
     }
 
-    func setLocalNumber(remoteWindowSize: UInt16, acknowledgementNumber: UInt32) {
+    func setRemoteWindowSize(windowSize: UInt16, acknowledgementNumber: UInt32) {
         writeMutex.lock()
-        this.remoteWindowSize = remoteWindowSize
-        localAcknowledgementNumber = acknowledgementNumber
+        if (acknowledgementNumber > localAcknowledgementNumber) {
+            remoteWindowSize = windowSize
+            localAcknowledgementNumber = acknowledgementNumber
+            localAcknowledgementNumberAckCounter = 0
+        }
+        if (acknowledgementNumber == localAcknowledgementNumber) {
+            localAcknowledgementNumberAckCounter++
+        }
         writeMutex.unlock()
     }
 
     @OverflowWrapping
-    func offloadPayload(payload: Array<UInt8>) {
+    func offloadPayload(payload: Array<UInt8>): Bool {
         if (readClosed) {
-            return
+            return false
         }
         lastReceivedTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
         try {
             readMutex.lock()
             let remainingSize = readBuffer.size - readableDataSize
             if (payload.size > remainingSize) {
-                return
+                return false
             }
-            let payloadIndex = startIndexOfReadableData + readableDataSize
+            let payloadIndex = (startIndexOfReadableData + readableDataSize) % readBuffer.size
             let copiedSize = min(payload.size, readBuffer.size - payloadIndex)
             payload.copyTo(readBuffer, 0, payloadIndex, copiedSize)
             if (copiedSize < payload.size) {
                 payload.copyTo(readBuffer, copiedSize, 0, payload.size - copiedSize)
             }
             readableDataSize += payload.size
+            remoteNextSequenceNumber += UInt32(payload.size)
+            return true
         } finally {
             readMutex.unlock()
         }
@@ -411,18 +425,27 @@ public class TunTcpSocket <: TunSocket {
         }
         var remainingDataSize = payload.size
         while (remainingDataSize > 0 && !closed) {
-            let remainingWindowSize = Int64(getRemoteRemainingWindowSize())
-            if (remainingWindowSize <= 0) {
+            var remainingBufferSize = writeBuffer.size - writableDataSize
+            if (remainingBufferSize <= 0) {
                 sleep(Duration.millisecond * 10)
                 continue
             }
-            let dataSize = min(remainingDataSize, remainingWindowSize)
-            let sentDataSize = manager.send(this, payload.slice(payload.size - remainingDataSize, dataSize))
-            if (sentDataSize <= 0) {
-                return sentDataSize
+            writeMutex.lock()
+            remainingBufferSize = writeBuffer.size - writableDataSize
+            if (remainingBufferSize <= 0) {
+                continue
             }
-            remainingDataSize -= sentDataSize
+            let payloadIndex = (startIndexOfWritableData + writableDataSize) % writeBuffer.size
+            let sizeToCopy = min(remainingDataSize, writeBuffer.size - writableDataSize)
+            let copiedSize = min(sizeToCopy, readBuffer.size - startIndexOfReadableData)
+            payload.copyTo(writeBuffer, payload.size - remainingDataSize, payloadIndex, copiedSize)
+            if (copiedSize < sizeToCopy) {
+                payload.copyTo(writeBuffer, payload.size - remainingDataSize - copiedSize, 0, sizeToCopy - copiedSize)
+            }
+            writableDataSize += sizeToCopy
+            remainingDataSize -= sizeToCopy
             lastSentTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
+            writeMutex.unlock()
         }
         return payload.size - remainingDataSize
     }

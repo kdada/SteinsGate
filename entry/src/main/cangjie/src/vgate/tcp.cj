@@ -4,12 +4,13 @@
 package ohos_app_cangjie_entry.vgate
 
 import ohos.hilog.*
-import std.collection.*
+import std.collection.ArrayList
 import std.collection.concurrent.*
 import std.sync.*
 import std.time.*
 import std.socket.*
 import std.random.*
+import std.math.*
 
 const tcpSessionTimeout = 30
 const tcpMaxPayloadSize = 1400
@@ -22,8 +23,9 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
     var closed = false
     let queues: Array<BlockingQueue<IPPacket>>
     let routines: Array<?Future<Unit>>
+    var sender: ?Future<Unit> = None
 
-    public init(device: TunDevice, pool: IPPacketPool, queueCount!: Int64 = 2, packetCapacity!: Int64 = 1000) {
+    public init(device: TunDevice, pool: IPPacketPool, queueCount!: Int64 = 5, packetCapacity!: Int64 = 1000) {
         this.device = device
         this.pool = pool
         var count = queueCount
@@ -36,12 +38,43 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
             let i = index
             routines[i] = spawn {handleLoop(queues[i])}
         }
+        sender = spawn {sendLoop()}
     }
 
     func handleLoop(queue: BlockingQueue<IPPacket>) {
         while (!closed) {
             if (let Some(packet) <- queue.dequeue(Duration.millisecond * 100)) {
-                handle(packet)
+                try {
+                    handle(packet)
+                } catch (e: Exception) {
+                    Hilog.error(0, "TcpStack", exceptionToString(e))
+                }
+            }
+        }
+    }
+
+    func sendLoop() {
+        var sent = false
+        var start = DateTime.now().toUnixTimeStamp().toMilliseconds()
+        while (!closed) {
+            if (!sent) {
+                sleep(Duration.millisecond * 10)
+                sent = false
+            }
+            var current = DateTime.now().toUnixTimeStamp().toMilliseconds()
+            let tick = current - start > 100
+            if (tick) {
+                start = current
+            }
+            for (queue in queues) {
+                if (closed) {
+                    break
+                }
+                for ((_, socket) in sockets) {
+                    if (send(socket, tick)) {
+                        sent = true
+                    }
+                }
             }
         }
     }
@@ -60,77 +93,228 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         queues[index].tryEnqueue(packet)
     }
 
+    @OverflowWrapping
     func handle(packet: IPPacket) {
-        let sourceIP = packet.sourceIP()
-        let sourcePort = packet.udpSourcePort()
-        let destinationIP = packet.destinationIP()
-        let destinationPort = packet.udpDestinationPort()
-        let pair = IPPair(sourceIP, sourcePort, destinationIP, destinationPort)
-        var s = sockets.get(pair)
-        if (s.isNone()) {
-            s = TunTcpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
-            sockets.put(pair, s.getOrThrow())
-        }
-        let socket = s.getOrThrow()
+        try {
+            let sourceIP = packet.sourceIP()
+            let sourcePort = packet.udpSourcePort()
+            let destinationIP = packet.destinationIP()
+            let destinationPort = packet.udpDestinationPort()
+            let pair = IPPair(sourceIP, sourcePort, destinationIP, destinationPort)
+            var s = sockets.get(pair)
+            if (s.isNone()) {
+                if (!packet.tcpFlagSYN()) {
+                    return
+                }
+                s = TunTcpSocket(this, sourceIP, sourcePort, destinationIP, destinationPort)
+                sockets.put(pair, s.getOrThrow())
+            }
+            let socket = s.getOrThrow()
 
-        if (socket.state == SocketInit) {
-            if (packet.tcpFlagSYN()) {
-                socket.state = SynReceived
-            }
-        } else if (socket.state == SynReceived) {
-            if (packet.tcpFlagACK() && packet.tcpAcknowledgementNumber() == socket.localNextSequenceNumber) {
-                socket.state = Established
-            }
-            let payload = packet.tcpPayload()
-            if (payload.size > 0) {
-            	socket.offloadPayload(payload)
-            }
-        } else if (socket.state == Established) {
-            let payload = packet.tcpPayload()
-            if (payload.size > 0) {
-            	socket.offloadPayload(payload)
-            }
-            if (packet.tcpFlagFIN()) {
-                socket.state = CloseWait
-            }
-        } else if (socket.state == CloseWait) {
-
-        } else if (socket.state == LastAck) {
             if (packet.tcpFlagACK()) {
-                socket.state = Closed
+                socket.setRemoteWindowSize(packet.tcpWindow(), packet.tcpAcknowledgementNumber())
             }
-        } else if (socket.state == FinWait1) {
-            if (packet.tcpFlagACK()) {
-                socket.state = FinWait2
-            }
-            if (packet.tcpFlagFIN()) {
-                socket.state = TimeWait
-            }
-        } else if (socket.state == FinWait2) {
-            if (packet.tcpFlagFIN()) {
-                socket.state = TimeWait
-            }
-        } else if (socket.state == TimeWait) {
 
-        } else if (socket.state == Closed) {
+            if (socket.state == SocketInit) {
+                if (packet.tcpFlagSYN()) {
+                    socket.state = SynReceived
+                    socket.remoteNextSequenceNumber = packet.tcpSequenceNumber() + 1
+                    socket.remoteWindowSize = packet.tcpWindow()
+                    let random = Random(UInt64(socket.remoteNextSequenceNumber))
+                    socket.localNextSequenceNumber = random.nextUInt32() / 2
+                    socket.localAcknowledgementNumber = socket.localNextSequenceNumber
+                    sendTcpPacket(
+                        socket,
+                        {
+                            packet =>
+                            packet.setTcpFlagSYN(true)
+                            socket.localNextSequenceNumber++
+                            0
+                        }
+                    )
+                    return
+                }
+            } else if (socket.state == SynReceived) {
+                if (packet.tcpFlagACK() && packet.tcpAcknowledgementNumber() == socket.localNextSequenceNumber) {
+                    socket.state = Established
+                    let payload = packet.tcpPayload()
+                    if (payload.size > 0) {
+                        socket.offloadPayload(payload)
+                    }
+                    return
+                }
+            } else if (socket.state == Established) {
+                if (packet.tcpSequenceNumber() == socket.remoteNextSequenceNumber) {
+                    let payload = packet.tcpPayload()
+                    if (payload.size > 0) {
+                        if (!socket.offloadPayload(payload)) {
+                            return
+                        }
+                    }
+                    if (packet.tcpFlagFIN()) {
+                        socket.state = CloseWait
+                        socket.remoteNextSequenceNumber++
+                    }
+                }
+            } else if (socket.state == CloseWait) {
+            } else if (socket.state == LastAck) {
+                if (packet.tcpFlagACK()) {
+                    if (socket.localNextSequenceNumber == socket.localAcknowledgementNumber) {
+                        socket.state = Closed
+                    }
+                }
+            } else if (socket.state == FinWait1 || socket.state == FinWait2) {
+                if (packet.tcpSequenceNumber() == socket.remoteNextSequenceNumber) {
+                    let payload = packet.tcpPayload()
+                    if (payload.size > 0) {
+                        if (!socket.offloadPayload(payload)) {
+                            return
+                        }
+                    }
 
+                    if (packet.tcpFlagACK()) {
+                        if (socket.localNextSequenceNumber == socket.localAcknowledgementNumber) {
+                            socket.state = FinWait2
+                            if (packet.tcpFlagFIN()) {
+                                socket.state = TimeWait
+                                socket.remoteNextSequenceNumber++
+                                sendTcpPacket(socket, {packet => 0})
+                            }
+                        }
+                    }
+                }
+            } else if (socket.state == TimeWait || socket.state == Closed) {
+            }
+        } finally {
+            packet.release()
         }
+    }
+
+    public func send(socket: TunTcpSocket, tick: Bool): Bool {
+        var sent = false
+        if (socket.state == Established || socket.state == CloseWait) {
+            socket.writeMutex.lock()
+            while (true) {
+                let unreceivedDataSize = (Int64(socket.localNextSequenceNumber) + Int64(UInt32.Max) - Int64(socket.
+                    localAcknowledgementNumber)) % Int64(UInt32.Max)
+                let writableDataSize = socket.writableDataSize - unreceivedDataSize
+                let remainingWindowSize = socket.getRemoteRemainingWindowSize()
+                if (writableDataSize <= 0 || remainingWindowSize <= 0) {
+                    break
+                }
+                sent = true
+                let startIndex = (socket.startIndexOfWritableData + unreceivedDataSize) % Int64(UInt32.Max)
+                let dataSizeToSend = min(writableDataSize, Int64(remainingWindowSize))
+                socket.localNextSequenceNumber += UInt32(sendTcpPacket(
+                    socket,
+                    {
+                        packet =>
+                        let headerLength = packet.headerLength() - packet.tcpHeaderLength()
+                        let payloadSize = min(packet.data.size - headerLength, dataSizeToSend)
+                        let copiedSize = min(payloadSize, socket.writeBuffer.size - startIndex)
+
+                        socket.writeBuffer.copyTo(packet.data, startIndex, headerLength, copiedSize)
+                        if (copiedSize < payloadSize) {
+                            socket.writeBuffer.copyTo(packet.data, 0, headerLength + copiedSize, payloadSize - copiedSize
+                            )
+                        }
+                        payloadSize
+                    }
+                ))
+            }
+
+            if (socket.writableDataSize <= 0 && socket.closed) {
+                if (socket.state == Established) {
+                    socket.state = FinWait1
+                    sent = true
+                    sendTcpPacket(
+                        socket,
+                        {
+                            packet =>
+                            packet.setTcpFlagFIN(true)
+                            socket.localNextSequenceNumber++
+                            0
+                        }
+                    )
+                } else if (socket.state == CloseWait) {
+                    socket.state = LastAck
+                    sent = true
+                    sendTcpPacket(
+                        socket,
+                        {
+                            packet =>
+                            packet.setTcpFlagFIN(true)
+                            socket.localNextSequenceNumber++
+                            0
+                        }
+                    )
+                }
+            }
+            socket.writeMutex.unlock()
+        }
+        if (tick && !sent) {
+            if (socket.remoteNextSequenceNumber != socket.remoteAcknowledgementNumber) {
+                sendTcpPacket(socket, {packet => 0})
+            }
+            if (socket.getRemoteRemainingWindowSize() <= 0) {
+                sendTcpPacket(socket, {packet => 0})
+            }
+            if (socket.sentLocalWindowSize <= 0) {
+                sendTcpPacket(socket, {packet => 0})
+            }
+        }
+        return sent
+    }
+
+    @OverflowWrapping
+    private func sendTcpPacket(socket: TunTcpSocket, modifier: (packet: IPPacket) -> Int64): Int64 {
+        let packet = pool.getPacket()
+        packet.resetIPHeader()
+        packet.resetTcpHeader()
+        packet.setProtocol(protocol())
+        packet.setSourceIP(socket.destinationIP)
+        packet.setTcpSourcePort(socket.destinationPort)
+        packet.setDestinationIP(socket.sourceIP)
+        packet.setTcpDestinationPort(socket.sourcePort)
+
+        socket.writeMutex.lock()
+        packet.setTcpAcknowledgementNumber(socket.remoteNextSequenceNumber)
+        packet.setTcpFlagACK(true)
+        packet.setTcpWindow(socket.getLocalRemainingWindowSize())
+        packet.setTcpSequenceNumber(socket.localNextSequenceNumber)
+
+        let payloadLength = modifier(packet)
+        packet.setLength(packet.headerLength() + packet.tcpHeaderLength() + payloadLength)
+        socket.localNextSequenceNumber += UInt32(payloadLength)
+
+        if (packet.tcpFlagACK()) {
+            let ackNumber = packet.tcpAcknowledgementNumber()
+            if (ackNumber > socket.remoteAcknowledgementNumber) {
+                socket.remoteAcknowledgementNumber = ackNumber
+                socket.sentLocalWindowSize = packet.tcpWindow()
+            }
+        }
+
+        packet.resumIPHeader()
+        packet.resumTcp()
+        device.enqueue(packet)
+        socket.writeMutex.unlock()
+        return payloadLength
     }
 
     public func send(socket: TunSocket, payload: Array<UInt8>): Int64 {
-        0
+        throw Exception("Not Implement")
     }
 
     public func terminate(socket: TunSocket) {
-        let tcpSocket = (socket as TunTcpSocket).getOrThrow()
-        if (tcpSocket.state == Established) {
-            tcpSocket.state = FinWait1
-        } else if (tcpSocket.state == CloseWait) {
-            tcpSocket.state = LastAck
-        }
         return
     }
 
     public func close() {
+        closed = true
+        sender?.get()
+        for (handler in routines) {
+            handler?.get()
+        }
     }
 }

@@ -10,6 +10,7 @@ import std.sync.*
 import ohos.hilog.*
 import std.time.*
 import std.core.*
+import std.socket.*
 
 public interface IPProtocolStack {
     func protocol(): UInt8
@@ -124,5 +125,69 @@ public class TunDevice {
 
     func enqueue(packet: IPPacket): Bool {
         queue.enqueue(packet)
+    }
+}
+
+public class TcpDirectListener <: TunSocketListener {
+    public func accept(socket: TunSocket): Unit {
+        spawn {
+            redirectTcp(socket)
+        }
+        return
+    }
+
+    func redirectTcp(socket: TunSocket) {
+        let tcp = TcpSocket(SocketAddress(SocketAddressKind.IPv4, socket.destinationIP, socket.destinationPort))
+        let timeout = Duration.second * tcpSessionTimeout
+        try {
+            tcp.writeTimeout = timeout
+            tcp.connect(timeout: timeout)
+
+            spawn {
+                try {
+                    var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
+                    while (!socket.isClosed() && !tcp.isClosed()) {
+                        let dataSize = tcp.read(buffer)
+                        if (dataSize < 0) {
+                            break
+                        }
+                        if (dataSize == 0 || dataSize > buffer.size) {
+                            continue
+                        }
+                        socket.write(buffer.slice(0, dataSize))
+                    }
+                } catch (e: Exception) {
+                    Hilog.error(0, "TcpDirectListener",
+                        "Receive ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
+                    )
+                } finally {
+                    socket.close()
+                    Hilog.debug(0, "TcpDirectListener",
+                        "TCP(In) Closed ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort}"
+                    )
+                }
+            }
+
+            var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
+            while (!socket.isClosed() && !tcp.isClosed()) {
+                let count = socket.read(buffer)
+                if (count < 0) {
+                    break
+                }
+                if (count == 0) {
+                    continue
+                }
+                tcp.write(buffer.slice(0, count))
+            }
+        } catch (e: Exception) {
+            Hilog.error(0, "TcpDirectListener",
+                "Send ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort} ${exceptionToString(e)}"
+            )
+        } finally {
+            Hilog.debug(0, "TcpDirectListener",
+                "TCP(Out) Closed ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            )
+            tcp.close()
+        }
     }
 }

@@ -220,7 +220,9 @@ public open class UdpDirectListener <: TunSocketListener {
                 udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, logTag, "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+            Hilog.error(0, logTag,
+                "Send ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort} ${exceptionToString(e)}"
+            )
         } finally {
             udp.close()
             Hilog.debug(0, logTag,
