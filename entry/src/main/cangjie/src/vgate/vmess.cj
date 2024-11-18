@@ -80,10 +80,12 @@ public class VmessConnection {
             16 /*Auth*/ + 1 /*Ver*/ + 16 /*IV*/ + 16 /*Key*/ + 1 /*V*/ + 1 /*Opt*/ + 1 /*P+Sec*/ + 1 /*Reserved*/ + 1 /*Cmd*/ + 2 /*Port*/ + 1 /*T*/ + 4 /*A*/ + 4 /*F*/ ,
             item: 0
         )
+        let r = SecureRandom()
         var offset = 0
         let timestamp = DateTime.now().toUnixTimeStamp().toSeconds()
+        let timestampOffset = Int64(r.nextUInt8(58)) - 29
         let timestampBuffer = Array<UInt8>(8, item: 0)
-        timestamp.writeBigEndian(timestampBuffer)
+        (timestamp + timestampOffset).writeBigEndian(timestampBuffer)
         let hmacKey = createSymKeyGenerator("HMAC").convertKey(DataBlob(id))
         let hmac = createMac("MD5")
         hmac.`init`(hmacKey)
@@ -96,7 +98,6 @@ public class VmessConnection {
         /*Ver*/ buffer[offset] = 1
 
         offset += 1
-        let r = SecureRandom()
         requestIV = Array<UInt8>(16, item: 0)
         for (i in 0..16) {
             requestIV[i] = r.nextUInt8()
