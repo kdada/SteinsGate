@@ -261,10 +261,10 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                     break
                 }
                 sent = true
-                let startIndex = (socket.startIndexOfWritableData + unreceivedDataSize) % Int64(UInt32.Max)
+                let startIndex = (socket.startIndexOfWritableData + unreceivedDataSize) % Int64(socket.writeBuffer.size)
                 let dataSizeToSend = min(writableDataSize, Int64(remainingWindowSize))
 
-                socket.localNextSequenceNumber += UInt32(sendTcpPacket(
+                sendTcpPacket(
                     socket,
                     {
                         packet =>
@@ -279,7 +279,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                         }
                         payloadSize
                     }
-                ))
+                )
             }
 
             if (socket.writableDataSize <= 0 && socket.closed) {

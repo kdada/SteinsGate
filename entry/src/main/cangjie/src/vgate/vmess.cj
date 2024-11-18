@@ -90,8 +90,6 @@ public class VmessConnection {
         hmac.update(DataBlob(timestampBuffer))
         /*Auth*/
         var macdata = hmac.doFinal()
-        //Hilog.debug(0, "VmessProxyListener",
-        //    "VMESS Mac ${address}:${port} ${id} ${timestamp} ${timestampBuffer} ${macdata.data}")
         macdata.data.copyTo(buffer, 0, offset, 16)
 
         offset += 16
@@ -117,8 +115,6 @@ public class VmessConnection {
         let md5Key2 = MD5()
         md5Key2.write(requestKey)
         responseKey = md5Key2.finish()
-
-        //Hilog.debug(0, "VmessProxyListener", "VMESS appendid ${address}:${port} ${id} ${appendId}")
 
         offset += 16
         v = Random(UInt64(timestamp)).nextUInt8()
@@ -161,9 +157,6 @@ public class VmessConnection {
         cipher.`init`(CryptoMode.ENCRYPT_MODE, key, params)
         let blob = cipher.update(DataBlob(buffer.slice(16, buffer.size - 16)))
         cipher.doFinal(None)
-        //Hilog.debug(0, "VmessProxyListener",
-        //    "VMESS cipher ${address}:${port} ${id} ${timestamp} ${timestampBuffer} ${requestIV} ${requestIV} ${buffer} ${blob.data}"
-        //)
         blob.data.copyTo(buffer, 0, 16, blob.data.size)
 
         socket.write(buffer)
@@ -172,9 +165,7 @@ public class VmessConnection {
 
     func readResponseHeader(): Int64 {
         let buffer = Array<UInt8>(4, item: 0)
-        //Hilog.debug(0, "VmessProxyListener", "VMESS start to read head ${buffer}")
         var count = socket.read(buffer)
-        //Hilog.debug(0, "VmessProxyListener", "VMESS read ${buffer} ${count}")
         if (count != 4) {
             return -1
         }
@@ -187,8 +178,6 @@ public class VmessConnection {
         let blob = cipher.update(DataBlob(buffer))
         cipher.doFinal(None)
 
-        //Hilog.debug(0, "VmessProxyListener", "VMESS read ${buffer} ${blob.data}")
-
         if ( /*V*/ blob.data[0] != v) {
             return -1
         }
@@ -199,7 +188,6 @@ public class VmessConnection {
                 return -1
             }
         }
-        //Hilog.debug(0, "VmessProxyListener", "VMESS read done ${buffer} ${blob.data}")
         responseHeaderRead = true
         count
     }
@@ -211,11 +199,9 @@ public class VmessConnection {
     }
 
     public func write(payload: Array<UInt8>) {
-        //Hilog.debug(0, "VmessProxyListener", "VMESS write to header ${address}")
         if (!requestHeaderWrote) {
             writeRequestHeader()
         }
-        //Hilog.debug(0, "VmessProxyListener", "VMESS write payload ${address}")
         var sentSize = 0
         while (sentSize < payload.size) {
             var bodyLength = payload.size - sentSize
@@ -223,21 +209,16 @@ public class VmessConnection {
                 bodyLength = 64992
             }
 
-            //Hilog.debug(0, "VmessProxyListener", "VMESS write payload ${address} ${bodyLength}")
-
             let symKeyGenerator = createSymKeyGenerator("AES128")
             let key = symKeyGenerator.convertKey(DataBlob(requestKey))
             let newIV = Array<UInt8>(12, item: 0)
             requestCount.writeBigEndian(newIV)
             requestIV.copyTo(newIV, 2, 2, 10)
-            //Hilog.debug(0, "VmessProxyListener", "VMESS new iv ${address} ${requestIV} ${newIV}")
             let params = GcmParamsSpec("AES128", DataBlob(newIV), DataBlob(), DataBlob())
             let cipher = createCipher("AES128|GCM|PKCS7")
             cipher.`init`(CryptoMode.ENCRYPT_MODE, key, params)
             let encryptedData = cipher.update(DataBlob(payload.slice(sentSize, bodyLength)))
             let gcmData = cipher.doFinal(None)
-            //Hilog.debug(0, "VmessProxyListener",
-            //    "VMESS encrypt ${address} ${encryptedData.data.size} ${gcmData.data.size}")
 
             var buffer = Array<UInt8>(2, item: 0)
             let size = UInt16(encryptedData.data.size) + UInt16(gcmData.data.size)
@@ -248,36 +229,29 @@ public class VmessConnection {
 
             sentSize += bodyLength
             requestCount++
-            //Hilog.debug(0, "VmessProxyListener",
-            //    "VMESS write done ${address} ${sentSize}, ${requestCount}, ${payload.size}")
         }
     }
 
     public func read(payload: Array<UInt8>): Int64 {
-        //Hilog.debug(0, "VmessProxyListener", "VMESS read")
         if (!responseHeaderRead) {
             if (readResponseHeader() < 0) {
                 return -1
             }
         }
 
-        //Hilog.debug(0, "VmessProxyListener", "VMESS read payload")
         if (responseRemainingBuffer.size <= 0) {
             var lengthBuffer = Array<UInt8>(2, item: 0)
             let count = socket.read(lengthBuffer)
-         //Hilog.debug(0, "VmessProxyListener", "VMESS read payload length ${lengthBuffer} ${count}")
             if (count != 2) {
                 return -1
             }
             let length = UInt16.readBigEndian(lengthBuffer)
-           //Hilog.debug(0, "VmessProxyListener", "VMESS read payload length 2 ${lengthBuffer} ${length}")
             let buffer = Array<UInt8>(Int64(length), item: 0)
             var readSize = 0
             while (readSize < buffer.size) {
                 let count = socket.read(buffer.slice(readSize, buffer.size - readSize))
                 readSize += count
             }
-            //Hilog.debug(0, "VmessProxyListener", "VMESS read payload length 3 ${lengthBuffer} ${length} ${readSize}")
 
             let symKeyGenerator = createSymKeyGenerator("AES128")
             let key = symKeyGenerator.convertKey(DataBlob(responseKey))
@@ -290,8 +264,6 @@ public class VmessConnection {
             cipher.`init`(CryptoMode.DECRYPT_MODE, key, params)
             let decryptedData = cipher.update(DataBlob(buffer.slice(0, buffer.size - 16)))
             let gcmData = cipher.doFinal(None)
-            //Hilog.debug(0, "VmessProxyListener",
-            //    "VMESS read payload length 4 ${decryptedData.data.size} ${gcmData.data.size}")
             if (gcmData.data.size != 0) {
                 return -1
             }
@@ -299,8 +271,6 @@ public class VmessConnection {
             responseRemainingBuffer = decryptedData.data
             responseCount++
         }
-        //Hilog.debug(0, "VmessProxyListener",
-        //    "VMESS read payload length eee ${responseRemainingBuffer.size} ${payload.size}")
 
         let copyLength = min(responseRemainingBuffer.size, payload.size)
         responseRemainingBuffer.copyTo(payload, 0, 0, copyLength)
@@ -310,8 +280,6 @@ public class VmessConnection {
         } else {
             responseRemainingBuffer = Array<UInt8>()
         }
-        //Hilog.debug(0, "VmessProxyListener", "VMESS read payload length 5 ${copyLength} ${responseRemainingBuffer.size}"
-        //)
         return copyLength
     }
 
@@ -350,10 +318,11 @@ public class VmessProxyListener <: TunSocketListener {
         let vmess = VmessConnection(userId, server, port)
         try {
             vmess.connect()
-            if (destinationIP.size <= 0) {
-                destinationIP = socket.destinationIP
+            var ip = destinationIP
+            if (ip.size <= 0) {
+                ip = socket.destinationIP
             }
-            vmess.setHeader(socket.protocol, destinationIP, socket.destinationPort)
+            vmess.setHeader(socket.protocol, ip, socket.destinationPort)
 
             spawn {
                 try {
@@ -369,13 +338,15 @@ public class VmessProxyListener <: TunSocketListener {
                         socket.write(buffer.slice(0, dataSize))
                     }
                 } catch (e: Exception) {
-                    Hilog.error(0, "VmessProxyListener",
-                        "Receive ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+                    if (!vmess.isClosed()) {
+                        Hilog.error(0, "VmessProxyListener",
+                            "Receive ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+                    }
                 } finally {
+                    socket.close()
                     Hilog.debug(0, "VmessProxyListener",
                         "VMESS Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                     )
-                    socket.close()
                 }
             }
 
@@ -393,10 +364,10 @@ public class VmessProxyListener <: TunSocketListener {
         } catch (e: Exception) {
             Hilog.error(0, "VmessProxyListener", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
         } finally {
+            vmess.close()
             Hilog.debug(0, "VmessProxyListener",
                 "VMESS Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
-            vmess.close()
         }
     }
 }

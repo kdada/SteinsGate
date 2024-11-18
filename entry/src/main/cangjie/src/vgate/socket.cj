@@ -44,7 +44,7 @@ public class All <: TunSocketChecker {
 }
 
 public class Not <: TunSocketChecker {
-    Not(let checker: TunSocketChecker) {}
+    public Not(let checker: TunSocketChecker) {}
 
     public func canAccept(socket: TunSocket, firstDataPacket: IPPacket): Bool {
         !checker.canAccept(socket, firstDataPacket)
@@ -182,6 +182,12 @@ public class InDomains <: TunSocketChecker {
             }
         }
         return false
+    }
+}
+
+public class BlackHoleListener <: TunSocketListener {
+    public func accept(socket: TunSocket) {
+        socket.close()
     }
 }
 
@@ -358,13 +364,22 @@ public class TunTcpSocket <: TunSocket {
 
     func setRemoteWindowSize(windowSize: UInt16, acknowledgementNumber: UInt32) {
         writeMutex.lock()
-        if (acknowledgementNumber > localAcknowledgementNumber) {
+        if (acknowledgementNumber >= localAcknowledgementNumber) {
             remoteWindowSize = windowSize
+
+            let ackBytes = acknowledgementNumber - localAcknowledgementNumber
+            if ((state == Established || state == CloseWait) && ackBytes > 0) {
+                startIndexOfWritableData = (Int64(startIndexOfWritableData) + Int64(ackBytes)) % Int64(UInt32.Max)
+                writableDataSize -= Int64(ackBytes)
+            }
+
             localAcknowledgementNumber = acknowledgementNumber
-            localAcknowledgementNumberAckCounter = 0
-        }
-        if (acknowledgementNumber == localAcknowledgementNumber) {
-            localAcknowledgementNumberAckCounter++
+
+            if (acknowledgementNumber > localAcknowledgementNumber) {
+                localAcknowledgementNumberAckCounter = 0
+            } else {
+                localAcknowledgementNumberAckCounter++
+            }
         }
         writeMutex.unlock()
     }
@@ -436,10 +451,11 @@ public class TunTcpSocket <: TunSocket {
             if (remainingBufferSize > 0) {
                 let payloadIndex = (startIndexOfWritableData + writableDataSize) % writeBuffer.size
                 let sizeToCopy = min(remainingDataSize, writeBuffer.size - writableDataSize)
-                let copiedSize = min(sizeToCopy, readBuffer.size - startIndexOfReadableData)
+                let copiedSize = min(sizeToCopy, readBuffer.size - payloadIndex)
+
                 payload.copyTo(writeBuffer, payload.size - remainingDataSize, payloadIndex, copiedSize)
                 if (copiedSize < sizeToCopy) {
-                    payload.copyTo(writeBuffer, payload.size - remainingDataSize - copiedSize, 0, sizeToCopy - copiedSize
+                    payload.copyTo(writeBuffer, payload.size - remainingDataSize + copiedSize, 0, sizeToCopy - copiedSize
                     )
                 }
                 writableDataSize += sizeToCopy
