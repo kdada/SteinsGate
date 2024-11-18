@@ -304,6 +304,7 @@ public class TunTcpSocket <: TunSocket {
     var localNextSequenceNumber: UInt32 = 0
     var sentLocalWindowSize: UInt16 = 0
 
+    var accepted = false
     var readClosed = false
     var internalState: TcpServerState = SocketInit
     var closedTimestamp = 0
@@ -407,8 +408,8 @@ public class TunTcpSocket <: TunSocket {
                 }
                 startIndexOfReadableData = (startIndexOfReadableData + sizeToCopy) % readBuffer.size
                 readableDataSize -= sizeToCopy
-                return sizeToCopy
                 readMutex.unlock()
+                return sizeToCopy
             }
             if (readClosed) {
                 return -1
@@ -432,25 +433,28 @@ public class TunTcpSocket <: TunSocket {
             }
             writeMutex.lock()
             remainingBufferSize = writeBuffer.size - writableDataSize
-            if (remainingBufferSize <= 0) {
-                continue
+            if (remainingBufferSize > 0) {
+                let payloadIndex = (startIndexOfWritableData + writableDataSize) % writeBuffer.size
+                let sizeToCopy = min(remainingDataSize, writeBuffer.size - writableDataSize)
+                let copiedSize = min(sizeToCopy, readBuffer.size - startIndexOfReadableData)
+                payload.copyTo(writeBuffer, payload.size - remainingDataSize, payloadIndex, copiedSize)
+                if (copiedSize < sizeToCopy) {
+                    payload.copyTo(writeBuffer, payload.size - remainingDataSize - copiedSize, 0, sizeToCopy - copiedSize
+                    )
+                }
+                writableDataSize += sizeToCopy
+                remainingDataSize -= sizeToCopy
+                lastSentTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
             }
-            let payloadIndex = (startIndexOfWritableData + writableDataSize) % writeBuffer.size
-            let sizeToCopy = min(remainingDataSize, writeBuffer.size - writableDataSize)
-            let copiedSize = min(sizeToCopy, readBuffer.size - startIndexOfReadableData)
-            payload.copyTo(writeBuffer, payload.size - remainingDataSize, payloadIndex, copiedSize)
-            if (copiedSize < sizeToCopy) {
-                payload.copyTo(writeBuffer, payload.size - remainingDataSize - copiedSize, 0, sizeToCopy - copiedSize)
-            }
-            writableDataSize += sizeToCopy
-            remainingDataSize -= sizeToCopy
-            lastSentTimestamp = DateTime.now().toUnixTimeStamp().toSeconds()
             writeMutex.unlock()
         }
         return payload.size - remainingDataSize
     }
 
     public override func close() {
+        if (closed) {
+            return
+        }
         closed = true
         manager.terminate(this)
     }

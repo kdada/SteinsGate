@@ -98,96 +98,32 @@ public class TunDevice {
     }
 
     private func writeLoop() {
-        var packet: ?IPPacket = None
+        var p: ?IPPacket = None
         while (!closed) {
             try {
-                if (queue.size <= 0) {
+                p = queue.dequeue()
+                if (p.isNone()) {
                     sleep(Duration.millisecond * 10)
-                    continue
+                	continue
                 }
-                packet = queue.dequeue()
-                let p = packet.getOrThrow()
+                let packet = p.getOrThrow()
                 unsafe {
-                    let rawData = acquireArrayRawData(p.data)
-                    write(tunFd, rawData.pointer, UIntNative(p.length()))
+                    let rawData = acquireArrayRawData(packet.data)
+                    write(tunFd, rawData.pointer, UIntNative(packet.length()))
                     releaseArrayRawData(rawData)
                 }
             } catch (e: Exception) {
                 Hilog.error(0, "TunDevice Write", exceptionToString(e))
             } finally {
-                packet?.release()
-                packet = None
+                p?.release()
+                p = None
             }
         }
-        packet?.release()
+        p?.release()
         return
     }
 
     func enqueue(packet: IPPacket): Bool {
         queue.enqueue(packet)
-    }
-}
-
-public class TcpDirectListener <: TunSocketListener {
-    public func accept(socket: TunSocket): Unit {
-        spawn {
-            redirectTcp(socket)
-        }
-        return
-    }
-
-    func redirectTcp(socket: TunSocket) {
-        let tcp = TcpSocket(SocketAddress(SocketAddressKind.IPv4, socket.destinationIP, socket.destinationPort))
-        let timeout = Duration.second * tcpSessionTimeout
-        try {
-            tcp.writeTimeout = timeout
-            tcp.connect(timeout: timeout)
-
-            spawn {
-                try {
-                    var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
-                    while (!socket.isClosed() && !tcp.isClosed()) {
-                        let dataSize = tcp.read(buffer)
-                        if (dataSize < 0) {
-                            break
-                        }
-                        if (dataSize == 0 || dataSize > buffer.size) {
-                            continue
-                        }
-                        socket.write(buffer.slice(0, dataSize))
-                    }
-                } catch (e: Exception) {
-                    Hilog.error(0, "TcpDirectListener",
-                        "Receive ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
-                    )
-                } finally {
-                    socket.close()
-                    Hilog.debug(0, "TcpDirectListener",
-                        "TCP(In) Closed ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort}"
-                    )
-                }
-            }
-
-            var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
-            while (!socket.isClosed() && !tcp.isClosed()) {
-                let count = socket.read(buffer)
-                if (count < 0) {
-                    break
-                }
-                if (count == 0) {
-                    continue
-                }
-                tcp.write(buffer.slice(0, count))
-            }
-        } catch (e: Exception) {
-            Hilog.error(0, "TcpDirectListener",
-                "Send ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort} ${exceptionToString(e)}"
-            )
-        } finally {
-            Hilog.debug(0, "TcpDirectListener",
-                "TCP(Out) Closed ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
-            )
-            tcp.close()
-        }
     }
 }

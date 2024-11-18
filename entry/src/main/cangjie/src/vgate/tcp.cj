@@ -24,6 +24,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
     let queues: Array<BlockingQueue<IPPacket>>
     let routines: Array<?Future<Unit>>
     var sender: ?Future<Unit> = None
+    var terminater: ?Future<Unit> = None
 
     public init(device: TunDevice, pool: IPPacketPool, queueCount!: Int64 = 5, packetCapacity!: Int64 = 1000) {
         this.device = device
@@ -39,6 +40,45 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
             routines[i] = spawn {handleLoop(queues[i])}
         }
         sender = spawn {sendLoop()}
+        terminater = spawn {terminateOutdatedSockets()}
+    }
+
+    func terminateOutdatedSockets() {
+        let checkInterval = Duration.second * tcpSessionTimeout / 3
+        while (!closed) {
+            var interval = Duration.Zero
+            while (interval < checkInterval) {
+                sleep(Duration.millisecond * 100)
+                if (closed) {
+                    break
+                }
+                interval += Duration.millisecond * 100
+            }
+            if (closed) {
+                break
+            }
+            let outdatedSockets = ArrayList<TunTcpSocket>()
+            let now = DateTime.now().toUnixTimeStamp().toSeconds()
+            for ((key, socket) in sockets) {
+                if (now - socket.lastReceivedTimestamp > tcpSessionTimeout && now - socket.lastSentTimestamp >
+                    tcpSessionTimeout) {
+                    outdatedSockets.append(socket)
+                }
+            }
+            for (socket in outdatedSockets) {
+                if (socket.state == Established) {
+                    socket.close()
+                } else {
+                    let key = IPPair(socket.sourceIP, socket.sourcePort, socket.destinationIP, socket.destinationPort)
+                    if (sockets.get(key).isSome()) {
+                        sockets.remove(key)
+                    }
+                }
+                Hilog.debug(0, "TcpStack",
+                    "Close/Remove outdated tcp socket ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+                )
+            }
+        }
     }
 
     func handleLoop(queue: BlockingQueue<IPPacket>) {
@@ -140,6 +180,15 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                     let payload = packet.tcpPayload()
                     if (payload.size > 0) {
                         socket.offloadPayload(payload)
+                        if (!socket.accepted) {
+                            for (handler in handlers) {
+                                if (handler.canAccept(socket, packet)) {
+                                    handler.accept(socket)
+                                    socket.accepted = true
+                                    break
+                                }
+                            }
+                        }
                     }
                     return
                 }
@@ -149,6 +198,15 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                     if (payload.size > 0) {
                         if (!socket.offloadPayload(payload)) {
                             return
+                        }
+                        if (!socket.accepted) {
+                            for (handler in handlers) {
+                                if (handler.canAccept(socket, packet)) {
+                                    handler.accept(socket)
+                                    socket.accepted = true
+                                    break
+                                }
+                            }
                         }
                     }
                     if (packet.tcpFlagFIN()) {
@@ -205,11 +263,12 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                 sent = true
                 let startIndex = (socket.startIndexOfWritableData + unreceivedDataSize) % Int64(UInt32.Max)
                 let dataSizeToSend = min(writableDataSize, Int64(remainingWindowSize))
+
                 socket.localNextSequenceNumber += UInt32(sendTcpPacket(
                     socket,
                     {
                         packet =>
-                        let headerLength = packet.headerLength() - packet.tcpHeaderLength()
+                        let headerLength = packet.headerLength() + packet.tcpHeaderLength()
                         let payloadSize = min(packet.data.size - headerLength, dataSizeToSend)
                         let copiedSize = min(payloadSize, socket.writeBuffer.size - startIndex)
 
@@ -315,6 +374,74 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
         sender?.get()
         for (handler in routines) {
             handler?.get()
+        }
+        terminater?.get()
+        return
+    }
+}
+
+public class TcpDirectListener <: TunSocketListener {
+    public func accept(socket: TunSocket): Unit {
+        spawn {
+            redirectTcp(socket)
+        }
+        return
+    }
+
+    func redirectTcp(socket: TunSocket) {
+        let tcp = TcpSocket(SocketAddress(SocketAddressKind.IPv4, socket.destinationIP, socket.destinationPort))
+        let timeout = Duration.second * tcpSessionTimeout
+        try {
+            tcp.writeTimeout = timeout
+            tcp.connect(timeout: timeout)
+
+            spawn {
+                try {
+                    var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
+                    while (!socket.isClosed() && !tcp.isClosed()) {
+                        let dataSize = tcp.read(buffer)
+                        if (dataSize < 0) {
+                            break
+                        }
+                        if (dataSize == 0 || dataSize > buffer.size) {
+                            continue
+                        }
+                        socket.write(buffer.slice(0, dataSize))
+                    }
+                } catch (e: Exception) {
+                    if (!tcp.isClosed()) {
+                        Hilog.error(0, "TcpDirectListener",
+                            "Receive ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
+                        )
+                    }
+                } finally {
+                    socket.close()
+                    Hilog.debug(0, "TcpDirectListener",
+                        "TCP(In) Closed ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort}"
+                    )
+                }
+            }
+
+            var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
+            while (!socket.isClosed() && !tcp.isClosed()) {
+                let count = socket.read(buffer)
+                if (count < 0) {
+                    break
+                }
+                if (count == 0) {
+                    continue
+                }
+                tcp.write(buffer.slice(0, count))
+            }
+        } catch (e: Exception) {
+            Hilog.error(0, "TcpDirectListener",
+                "Send ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort} ${exceptionToString(e)}"
+            )
+        } finally {
+            Hilog.debug(0, "TcpDirectListener",
+                "TCP(Out) Closed ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            )
+            tcp.close()
         }
     }
 }

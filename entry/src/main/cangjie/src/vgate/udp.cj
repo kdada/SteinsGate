@@ -197,9 +197,11 @@ public open class UdpDirectListener <: TunSocketListener {
                         socket.write(buffer.slice(0, dataSize))
                     }
                 } catch (e: Exception) {
-                    Hilog.error(0, logTag,
-                        "${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
-                    )
+                    if (!udp.isClosed()) {
+                        Hilog.error(0, logTag,
+                            "${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
+                        )
+                    }
                 } finally {
                     socket.close()
                     Hilog.debug(0, logTag,
