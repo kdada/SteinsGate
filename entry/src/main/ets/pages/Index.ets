@@ -1,15 +1,15 @@
 import { Want } from '@kit.AbilityKit';
 import { vpnExtension } from '@kit.NetworkKit';
-import { ComponentContent, SymbolGlyphModifier } from '@kit.ArkUI';
+import { ComponentContent, PersistenceV2, SymbolGlyphModifier } from '@kit.ArkUI';
 import { Setting } from './Setting';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BusinessError } from '@kit.BasicServicesKit';
 import { util } from '@kit.ArkTS';
-import { VMessAuthData } from './Base';
+import { defaultVMessSetting, VMessAuthData, VMessSetting } from './Base';
 import { Detail } from './Detail';
 import { kvManager } from '../entryability/EntryAbility';
 import { distributedKVStore } from '@kit.ArkData';
+import { fileIo as fs } from '@kit.CoreFileKit';
 
 class PromptParams<T> {
   private ctx?: UIContext
@@ -83,6 +83,7 @@ struct Index {
   @Provider("pageStack") pageStack: NavPathStack = new NavPathStack();
   @Local selectedItem?: VMessAuthData = undefined;
   @Local started: boolean = false
+  @Local setting: VMessSetting = PersistenceV2.connect(VMessSetting, "GlobalSetting", () => defaultVMessSetting())!
   private next: number = 0
   private want: Want = {
     deviceId: "",
@@ -239,7 +240,40 @@ struct Index {
                 .fontColor(["#FFFFFF"])
             }
             .onClick(() => {
+              if (this.items.length <= 0) {
+                this.getUIContext().getPromptAction().showToast({
+                  message: `请先添加 VMess 配置`
+                })
+                return
+              }
+              if (!this.selectedItem) {
+                this.getUIContext().getPromptAction().showToast({
+                  message: `请先选择一个 VMess 配置（左滑配置，点击 ✔ 按钮）`
+                })
+                return
+              }
               if (!this.started) {
+                let config: Record<string, Object> = {
+                  "domainListURL": this.setting.domainListURL,
+                  "ipListURL": this.setting.ipListURL,
+                  "downloadDomainListViaProxy": this.setting.downloadDomainListViaProxy,
+                  "downloadIPListViaProxy": this.setting.downloadIPListViaProxy,
+                  "domainBlackList": this.setting.domainBlackList,
+                  "ipBlackList": this.setting.ipBlackList,
+                  "directDNS": this.setting.directDNS,
+                  "proxyDNS": this.setting.proxyDNS,
+                  "dnsProxyType": this.setting.dnsProxyType,
+                  "ipProxyType": this.setting.ipProxyType,
+
+                  "server": this.selectedItem!.address,
+                  "port": this.selectedItem!.port,
+                  "id": this.selectedItem!.id,
+                }
+                let configData = JSON.stringify(config)
+                let path = this.getUIContext().getHostContext()!.filesDir + "/config.json"
+                let file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+                fs.writeSync(file.fd, configData)
+                fs.closeSync(file.fd)
                 vpnExtension.startVpnExtensionAbility(this.want);
               } else {
                 vpnExtension.stopVpnExtensionAbility(this.want);
@@ -303,7 +337,7 @@ struct Index {
       let version = vmessObject["v"]
       if (version != "2") {
         this.getUIContext().getPromptAction().showToast({
-          message: `仅支持 v2 版本的链接配置，当前版本为 ${version}`
+          message: `仅支持 v2 版本的 VMess 配置，当前版本为 ${version}`
         })
         return
       }
@@ -323,7 +357,7 @@ struct Index {
       }
       if (net != "tcp") {
         this.getUIContext().getPromptAction().showToast({
-          message: `仅支持通过 TCP 连接 vmess 服务器，当前配置为 ${net}`
+          message: `仅支持通过 TCP 连接 VMess 服务器，当前配置为 ${net}`
         })
         return
       }

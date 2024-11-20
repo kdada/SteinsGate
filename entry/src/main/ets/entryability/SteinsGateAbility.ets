@@ -4,7 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { requireCJLib } from "libark_interop_loader.so";
 
 interface CJLib {
-  startVpn(src: number): number
+  startVpn(src: number, configPath: string): number
   stopVpn(): number
 }
 
@@ -21,10 +21,13 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
     this.vpnConnection = vpnExtension.createVpnConnection(this.context);
     hilog.info(0x0000, 'debugVPN', '%{public}s', 'Succeeded to create vpn connection');
     await this.SetupVpn();
-    cjlib.startVpn(this.tunFd);
+    let configPath = this.context.filesDir + "/config.json"
+    cjlib.startVpn(this.tunFd, configPath);
     hilog.info(0x0000, 'debugVPN', `Succeeded to connect server`);
     //await this.Protect();
   }
+
+
 
   async Protect(): Promise<void> {
     try {

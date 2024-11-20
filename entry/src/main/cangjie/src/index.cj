@@ -5,8 +5,9 @@ internal import ohos.ark_interop.JSContext
 internal import ohos.ark_interop.JSCallInfo
 internal import ohos.ark_interop.JSValue
 internal import cj_res_entry.app
-import ohos_app_cangjie_entry.tun.*
-import std.socket.TcpSocket
+import ohos_app_cangjie_entry.vgate.*
+import ohos.hilog.Hilog
+import ohos.file_fs.*
 
 var device: ?TunDevice = None
 
@@ -14,32 +15,91 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     if (device.isSome()) {
         stopVpn(runtime, callInfo)
     }
-    let id = "b831381d-6324-4d53-ad4f-8cda48b30811"
-    let server = "192.168.1.99"
-    let port = UInt16(15867)
-
     let tunFd = Int32(callInfo[0].toNumber())
+    let configFilePath = callInfo[1].toString()
+    let configData = FileFs.readText(configFilePath)
+
+    Hilog.debug(0, "configData", configData)
+
+    let domainList = ""
+    let ipList = ""
+    let domainBlackList = ""
+    let ipBlackList = ""
+    let directDNS = Array<UInt8>()
+    let proxyDNS = Array<UInt8>()
+    let server = ""
+    let port: UInt16 = 0
+    let id = ""
+    let dnsProxyType = 0
+    let ipProxyType = 0
+
     let pool = IPPacketPool(10000)
     let dev = TunDevice(tunFd, pool)
 
     let udpStack = UdpStack(dev, pool)
-    udpStack.register(CustomTunSocketHandler(InDomains("baidu.com"), VmessProxyListener(id, server, port).dnat([114, 114, 114, 114])))
-    udpStack.register(CustomTunSocketHandler(OnlyDNSRequest(), DnsDirectListener([114, 114, 114, 114])))
-    udpStack.register(CustomTunSocketHandler(All(), UdpDirectListener()))
-    dev.register(udpStack)
-
     let tcpStack = TcpStack(dev, pool)
-    tcpStack.register(CustomTunSocketHandler(InAddresses("180.101.50.0/24"), VmessProxyListener(id, server, port)))
-    tcpStack.register(CustomTunSocketHandler(All(), TcpDirectListener()))
-    dev.register(tcpStack)
 
+    if (domainBlackList != "") {
+        udpStack.register(
+            CustomTunSocketHandler(
+                InDomains(domainBlackList),
+                BlackHoleListener()
+            )
+        )
+    }
+
+    if (ipBlackList != "") {
+        let handler = CustomTunSocketHandler(
+            InAddresses(ipBlackList),
+            BlackHoleListener()
+        )
+        udpStack.register(handler)
+        tcpStack.register(handler)
+    }
+
+    if (domainList != "") {
+        var checker: TunSocketChecker = OnlyDNSRequest()
+        if (dnsProxyType == 1) {
+            checker = InDomains(domainList)
+        } else if (dnsProxyType == 2) {
+            checker = Not(InDomains(domainList))
+        } else if (dnsProxyType == 3) {
+            checker = OnlyDNSRequest()
+        } else {
+            checker = Not(All())
+        }
+        udpStack.register(CustomTunSocketHandler(checker, VmessProxyListener(id, server, port).dnat(proxyDNS)))
+    }
+    udpStack.register(CustomTunSocketHandler(OnlyDNSRequest(), DnsDirectListener(directDNS)))
+
+    if (ipList != "") {
+        var checker: TunSocketChecker = All()
+        if (dnsProxyType == 1) {
+            checker = InAddresses(domainList)
+        } else if (dnsProxyType == 2) {
+            checker = Not(InAddresses(domainList))
+        } else if (dnsProxyType == 3) {
+            checker = All()
+        } else {
+            checker = Not(All())
+        }
+        udpStack.register(CustomTunSocketHandler(checker, VmessProxyListener(id, server, port)))
+        tcpStack.register(CustomTunSocketHandler(checker, VmessProxyListener(id, server, port)))
+    }
+    udpStack.register(CustomTunSocketHandler(All(), UdpDirectListener()))
+    tcpStack.register(CustomTunSocketHandler(All(), TcpDirectListener()))
+
+    dev.register(udpStack)
+    dev.register(tcpStack)
     dev.start()
     device = dev
     return runtime.undefined().toJSValue()
 }
 
 func stopVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
-    device?.stop()
+    spawn {
+        device?.close()
+    }
     device = None
     return runtime.undefined().toJSValue()
 }
