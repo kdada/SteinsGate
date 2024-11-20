@@ -1,9 +1,10 @@
 import { VMessAuthData } from "./Base"
 
-@Component
+@ComponentV2
 export struct Detail {
-  @State item: VMessAuthData = new VMessAuthData()
-  private changed: boolean = false
+  @Param item: VMessAuthData = new VMessAuthData()
+  @Event changeAlias: (str: string) => void = () => {
+  }
 
   build() {
     NavDestination() {
@@ -18,8 +19,7 @@ export struct Detail {
             .type(InputType.Normal)
             .maxLength(200)
             .onChange((str) => {
-              this.item.alias = str;
-              this.changed = true
+              this.changeAlias(str)
             })
         }
         .height(40)

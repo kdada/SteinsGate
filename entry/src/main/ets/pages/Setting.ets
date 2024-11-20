@@ -1,18 +1,16 @@
-@Component
+import {
+  defaultVMessSetting,
+  DNSProxyType,
+  DNSProxyTypeToString,
+  IPProxyType,
+  IPProxyTypeToString,
+  VMessSetting
+} from "./Base"
+import { PersistenceV2 } from "@kit.ArkUI"
+
+@ComponentV2
 export struct Setting {
-  @StorageLink("domainListURL") domainListURL: string =
-    "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"
-  @StorageLink("ipListURL") ipListURL: string =
-    "https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt"
-  @StorageLink("downloadDomainListViaProxy") downloadDomainListViaProxy: boolean = true
-  @StorageLink("downloadIPListViaProxy") downloadIPListViaProxy: boolean = true
-  @StorageLink("domainBlackList") domainBlackList: string =
-    "browsercfg-drcn.cloud.dbankcloud.cn\nbrowserr-drcn.dbankcdn.cn\nmetrics1-drcn.dt.dbankcloud.cn"
-  @StorageLink("ipBlackList") ipBlackList: string = ""
-  @StorageLink("directDNS") directDNS: string = "114.114.114.114"
-  @StorageLink("proxyDNS") proxyDNS: string = "8.8.8.8"
-  @StorageLink("dnsSetting") dnsSetting: string = "通过代理解析域名列表中的域名"
-  @StorageLink("ipSetting") ipSetting: string = "通过代理访问不在 IP 列表中的 IP"
+  @Local setting: VMessSetting = PersistenceV2.connect(VMessSetting, "GlobalSetting", () => defaultVMessSetting())!
 
   build() {
     NavDestination() {
@@ -24,8 +22,11 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            TextInput({ text: this.domainListURL })
+            TextInput({ text: this.setting.domainListURL })
               .width("50%")
+              .onChange(text => {
+                this.setting.domainListURL = text
+              })
           }
           .margin({ bottom: 5 })
 
@@ -36,9 +37,9 @@ export struct Setting {
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
             Column() {
-              Toggle({ type: ToggleType.Switch, isOn: this.downloadDomainListViaProxy })
+              Toggle({ type: ToggleType.Switch, isOn: this.setting.downloadDomainListViaProxy })
                 .onChange((isOn) => {
-                  this.downloadDomainListViaProxy = isOn
+                  this.setting.downloadDomainListViaProxy = isOn
                 })
             }
             .alignItems(HorizontalAlign.End)
@@ -52,8 +53,11 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            TextInput({ text: this.ipListURL })
+            TextInput({ text: this.setting.ipListURL })
               .width("50%")
+              .onChange(text => {
+                this.setting.ipListURL = text
+              })
           }
           .margin({ bottom: 5 })
 
@@ -64,9 +68,9 @@ export struct Setting {
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
             Column() {
-              Toggle({ type: ToggleType.Switch, isOn: this.downloadIPListViaProxy })
+              Toggle({ type: ToggleType.Switch, isOn: this.setting.downloadIPListViaProxy })
                 .onChange((isOn) => {
-                  this.downloadIPListViaProxy = isOn
+                  this.setting.downloadIPListViaProxy = isOn
                 })
             }
             .alignItems(HorizontalAlign.End)
@@ -80,9 +84,12 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            TextArea({ text: this.domainBlackList })
+            TextArea({ text: this.setting.domainBlackList })
               .width("50%")
               .height(80)
+              .onChange(text => {
+                this.setting.domainBlackList = text
+              })
           }
           .margin({ bottom: 5 })
 
@@ -92,9 +99,12 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            TextArea({ text: this.ipBlackList })
+            TextArea({ text: this.setting.ipBlackList })
               .width("50%")
               .height(80)
+              .onChange(text => {
+                this.setting.ipBlackList = text
+              })
           }
           .margin({ bottom: 5 })
 
@@ -104,8 +114,11 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            TextInput({ text: this.directDNS })
+            TextInput({ text: this.setting.directDNS })
               .width("50%")
+              .onChange(text => {
+                this.setting.directDNS = text
+              })
           }
           .margin({ bottom: 5 })
 
@@ -115,8 +128,11 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            TextInput({ text: this.proxyDNS })
+            TextInput({ text: this.setting.proxyDNS })
               .width("50%")
+              .onChange(text => {
+                this.setting.proxyDNS = text
+              })
           }
           .margin({ bottom: 5 })
 
@@ -126,26 +142,31 @@ export struct Setting {
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
-            Button(this.dnsSetting)
+            Button(DNSProxyTypeToString(this.setting.dnsProxyType))
+              .fontSize(12)
               .bindMenu([
                 {
-                  value: "通过代理解析域名列表中的域名",
+                  value: DNSProxyTypeToString(DNSProxyType.ProxyWhichInDomainList),
                   action: () => {
+                    this.setting.dnsProxyType = DNSProxyType.ProxyWhichInDomainList
                   }
                 },
                 {
-                  value: "通过代理解析不在域名列表中的域名",
+                  value: DNSProxyTypeToString(DNSProxyType.ProxyWhichNotInDomainList),
                   action: () => {
+                    this.setting.dnsProxyType = DNSProxyType.ProxyWhichNotInDomainList
                   }
                 },
                 {
-                  value: "通过代理解析所有域名",
+                  value: DNSProxyTypeToString(DNSProxyType.ProxyAll),
                   action: () => {
+                    this.setting.dnsProxyType = DNSProxyType.ProxyAll
                   }
                 },
                 {
-                  value: "不使用代理解析所有域名",
+                  value: DNSProxyTypeToString(DNSProxyType.ProxyNone),
                   action: () => {
+                    this.setting.dnsProxyType = DNSProxyType.ProxyNone
                   }
                 }
               ])
@@ -154,32 +175,37 @@ export struct Setting {
           .margin({ bottom: 5 })
 
           Row() {
-            Text("链接设置")
+            Text("访问设置")
               .width("30%")
               .fontWeight(FontWeight.Bold)
               .textAlign(TextAlign.Start)
               .padding({ left: 5 })
 
-            Button(this.ipSetting)
+            Button(IPProxyTypeToString(this.setting.ipProxyType))
+              .fontSize(12)
               .bindMenu([
                 {
-                  value: "通过代理访问 IP 列表中的 IP",
+                  value: IPProxyTypeToString(IPProxyType.ProxyWhichInIPList),
                   action: () => {
+                    this.setting.ipProxyType = IPProxyType.ProxyWhichInIPList
                   }
                 },
                 {
-                  value: "通过代理访问不在 IP 列表中的 IP",
+                  value: IPProxyTypeToString(IPProxyType.ProxyWhichNotInIPList),
                   action: () => {
+                    this.setting.ipProxyType = IPProxyType.ProxyWhichNotInIPList
                   }
                 },
                 {
-                  value: "通过代理访问所有 IP",
+                  value: IPProxyTypeToString(IPProxyType.ProxyAll),
                   action: () => {
+                    this.setting.ipProxyType = IPProxyType.ProxyAll
                   }
                 },
                 {
-                  value: "不使用代理访问所有 IP",
+                  value: IPProxyTypeToString(IPProxyType.ProxyNone),
                   action: () => {
+                    this.setting.ipProxyType = IPProxyType.ProxyNone
                   }
                 }
               ])

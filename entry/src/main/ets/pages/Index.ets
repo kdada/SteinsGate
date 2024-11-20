@@ -8,6 +8,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { util } from '@kit.ArkTS';
 import { VMessAuthData } from './Base';
 import { Detail } from './Detail';
+import { kvManager } from '../entryability/EntryAbility';
+import { distributedKVStore } from '@kit.ArkData';
 
 class PromptParams<T> {
   private ctx?: UIContext
@@ -75,51 +77,123 @@ function buildVMessInput(params: PromptParams<VMessParams>) {
 }
 
 @Entry
-@Component
+@ComponentV2
 struct Index {
-  @State items: VMessAuthData[] = [];
-  @Provide("pageStack") pageStack: NavPathStack = new NavPathStack();
+  @Local items: Array<VMessAuthData> = [];
+  @Provider("pageStack") pageStack: NavPathStack = new NavPathStack();
+  @Local selectedItem?: VMessAuthData = undefined;
+  @Local started: boolean = false
   private next: number = 0
   private want: Want = {
     deviceId: "",
     bundleName: "com.kilodim.steinsgate",
     abilityName: "SteinsGateAbility",
   };
+  private kvStore?: distributedKVStore.DeviceKVStore = undefined;
+
+  aboutToAppear(): void {
+    kvManager.getKVStore("authdata", {
+      createIfMissing: true,
+      securityLevel: distributedKVStore.SecurityLevel.S2,
+    }, (err: Error, store: distributedKVStore.DeviceKVStore) => {
+      if (err) {
+        hilog.error(0x0001, '[KV Sample]',
+          `Failed to get KVStore. Code: ${err.name}, message: ${err.message}`);
+        return;
+      }
+      this.kvStore = store
+      this.kvStore.getEntries("/data/auth/", (err, data) => {
+        for (let i = 0; i < data.length; i++) {
+          let element = data[i];
+          let authdata = JSON.parse(element.value.value as string) as VMessAuthData
+          this.items.push(authdata)
+          if (authdata.index >= this.next) {
+            this.next = authdata.index + 1
+          }
+        }
+        this.items.sort((a, b) => a.index - b.index)
+      })
+    })
+
+  }
 
   @Builder
   pagesMap(name: string, param: object) {
     if (name == 'Setting') {
       Setting()
     } else if (name == 'Detail') {
-      Detail({item: param as VMessAuthData})
+      Detail({
+        item: (param as VMessAuthData), changeAlias: (str) => {
+          for (let index = 0; index < this.items.length; index++) {
+            const element = this.items[index];
+            if (element.index != (param as VMessAuthData).index) {
+              continue
+            }
+            let newData = new VMessAuthData()
+            newData.index = element.index
+            newData.alias = str
+            newData.address = element.address
+            newData.port = element.port
+            newData.id = element.id
+            if (this.kvStore) {
+              let authString = JSON.stringify(newData)
+              this.kvStore.put(`/data/auth/${newData.index}`, authString)
+            }
+            this.items[index] = newData
+            break
+          }
+        }
+      })
     }
   }
 
   @Builder
-  deleteButton(idx: number) {
-    Button() {
-      SymbolGlyph($r("sys.symbol.trash"))
-        .fontSize(35)
-    }
-    .backgroundColor("#FF0000")
-    .type(ButtonType.Normal)
-    .width(60)
-    .height("100%")
-    .onClick((event) => {
-      let item: VMessAuthData | undefined = undefined
-      let index = 0
-      for (let i = 0; i < this.items.length; i++) {
-        if (idx == this.items[i].index) {
-          item = this.items[i]
-          index = i
-          break
+  additionalButtons(idx: number) {
+    Row() {
+      Button() {
+        SymbolGlyph($r("sys.symbol.checkmark"))
+          .fontSize(35)
+          .fontColor(["#FFFFFF"])
+      }
+      .backgroundColor("#00FF00")
+      .type(ButtonType.Normal)
+      .width(60)
+      .height("100%")
+      .onClick((event) => {
+        for (let i = 0; i < this.items.length; i++) {
+          if (idx == this.items[i].index) {
+            this.selectedItem = this.items[i]
+            break
+          }
         }
+      })
+
+      Button() {
+        SymbolGlyph($r("sys.symbol.trash"))
+          .fontSize(35)
+          .fontColor(["#FFFFFF"])
       }
-      if (!item) {
-        return
-      }
-      this.items.splice(index, 1)
-    })
+      .backgroundColor("#FF0000")
+      .type(ButtonType.Normal)
+      .width(60)
+      .height("100%")
+      .onClick((event) => {
+        let item: VMessAuthData | undefined = undefined
+        let index = 0
+        for (let i = 0; i < this.items.length; i++) {
+          if (idx == this.items[i].index) {
+            item = this.items[i]
+            index = i
+            break
+          }
+        }
+        if (!item) {
+          return
+        }
+        this.kvStore?.delete(`/data/auth/${item.index}`)
+        this.items.splice(index, 1)
+      })
+    }
   }
 
   build() {
@@ -131,7 +205,8 @@ struct Index {
               ListItem() {
                 Row() {
                   Column() {
-                    Text(item.alias)
+                    Text((this.selectedItem && item.index == this.selectedItem.index) ? `[*]` + item.alias :
+                    item.alias)
                       .fontSize(15)
                       .fontWeight(FontWeight.Bold)
                     Text(item.address + ":" + item.port)
@@ -139,16 +214,16 @@ struct Index {
                   }
                   .alignItems(HorizontalAlign.Start)
                   .width("90%")
-                  .margin({left: "5%"})
+                  .margin({ left: "5%" })
                 }
                 .margin(10)
                 .width("100%")
                 .onClick(() => this.pageStack.pushPathByName("Detail", item))
               }
-              .swipeAction({ end: this.deleteButton(item.index) })
+              .swipeAction({ end: this.additionalButtons(item.index) })
               .borderColor("#F0F0F0")
               .borderWidth({ bottom: 1 })
-            }, (item: VMessAuthData, index: number) => `${item.index}`)
+            }, (item: VMessAuthData) => `${item.alias}-${item.index}`)
           }
           .alignRules({
             "top": { "anchor": "__container__", "align": VerticalAlign.Top },
@@ -158,22 +233,31 @@ struct Index {
           })
 
           Row() {
-            Column() {
-              Button('Start VPN').onClick(() => {
+            Button({ type: ButtonType.Circle, stateEffect: false }) {
+              SymbolGlyph($r(this.started ? "sys.symbol.paperplane_fill" : "sys.symbol.paperplane"))
+                .fontSize(30)
+                .fontColor(["#FFFFFF"])
+            }
+            .onClick(() => {
+              if (!this.started) {
                 vpnExtension.startVpnExtensionAbility(this.want);
-              }).width('70%').fontSize(20).margin(16)
-              Button('Stop VPN').onClick(() => {
+              } else {
                 vpnExtension.stopVpnExtensionAbility(this.want);
-              }).width('70%').fontSize(20).margin(16)
-
-            }.width('100%')
+              }
+              this.started = !this.started
+            })
+            .width('70%')
+            .fontSize(20)
+            .margin(16)
+            .width(50)
+            .height(50)
           }
           .alignRules({
             "right": { "anchor": "__container__", "align": HorizontalAlign.End },
             "bottom": { "anchor": "__container__", "align": VerticalAlign.Bottom },
           })
-          .width(200)
-          .height(200)
+          .width(100)
+          .height(100)
         }
       }
       .navDestination(this.pagesMap)
@@ -249,6 +333,10 @@ struct Index {
         address: ipOrDomain,
         port: port,
         id: id,
+      }
+      if (this.kvStore) {
+        let authString = JSON.stringify(authdata)
+        this.kvStore.put(`/data/auth/${authdata.index}`, authString)
       }
       this.items.push(authdata)
     } catch (e) {
