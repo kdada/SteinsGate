@@ -22,6 +22,7 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
     hilog.info(0x0000, 'debugVPN', '%{public}s', 'Succeeded to create vpn connection');
     await this.SetupVpn();
     let configPath = this.context.filesDir + "/config.json"
+    hilog.info(0x0000, 'debugVPN', `Start vpn with config ${configPath}`);
     cjlib.startVpn(this.tunFd, configPath);
     hilog.info(0x0000, 'debugVPN', `Succeeded to connect server`);
     //await this.Protect();

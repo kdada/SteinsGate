@@ -22,7 +22,7 @@ import ohos.crypto.GcmParamsSpec
 import ohos.crypto.IvParamsSpec
 import crypto.crypto.SecureRandom
 
-public class VmessConnection {
+public class VmessConnection <: StreamingSocket {
     let id: Array<UInt8>
     let appendId: Array<UInt8>
     let serverAddress: SocketAddress
@@ -44,6 +44,33 @@ public class VmessConnection {
     var responseIV = Array<UInt8>()
     var responseCount = UInt16(0)
     var responseRemainingBuffer = Array<UInt8>()
+
+    public prop localAddress: SocketAddress {
+        get() {
+            socket.localAddress
+        }
+    }
+    public prop remoteAddress: SocketAddress {
+        get() {
+            socket.remoteAddress
+        }
+    }
+    public mut prop readTimeout: ?Duration {
+        get() {
+            socket.readTimeout
+        }
+        set(v) {
+            socket.readTimeout = v
+        }
+    }
+    public mut prop writeTimeout: ?Duration {
+        get() {
+            socket.writeTimeout
+        }
+        set(v) {
+            socket.writeTimeout = v
+        }
+    }
 
     public init(userId: String, server: String, port: UInt16) {
         id = fromHexString(userId.replace("-", "")).getOrThrow()
@@ -296,6 +323,10 @@ public class VmessConnection {
             socket.flush()
             socket.close()
         }
+    }
+
+    public func toString(): String {
+        return "${socket.localAddress.toString()} -> ${socket.remoteAddress.toString()}"
     }
 }
 

@@ -23,8 +23,8 @@ export class VMessSetting {
 
 export function defaultVMessSetting(): VMessSetting {
   let setting = new VMessSetting()
-  setting.domainListURL = "https=//raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"
-  setting.ipListURL = "https=//raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt"
+  setting.domainListURL = "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt"
+  setting.ipListURL = "https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt"
   setting.downloadDomainListViaProxy = true
   setting.downloadIPListViaProxy = true
   setting.domainBlackList =

@@ -9,8 +9,8 @@ import std.sync.sleep
 import std.time.Duration
 
 const IPPacketMaxSize = 1500
-const ProtocolTcp: UInt8 = 0x6
-const ProtocolUdp: UInt8 = 0x11
+public const ProtocolTcp: UInt8 = 0x6
+public const ProtocolUdp: UInt8 = 0x11
 
 func exceptionToString(e: Exception): String {
     var message = " Exception: ${e.message}\n"
