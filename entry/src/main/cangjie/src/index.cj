@@ -13,6 +13,9 @@ import serialization.serialization.*
 import std.convert.*
 import net.http.*
 import std.socket.*
+import net.tls.TlsClientConfig
+import net.tls.CertificateVerifyMode
+import encoding.url.URL
 
 var device: ?TunDevice = None
 
@@ -24,7 +27,7 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     let configFilePath = callInfo[1].toString()
     let configJson = FileFs.readText(configFilePath)
 
-    Hilog.debug(0, "configData", configJson)
+    Hilog.debug(0x1799, "configData", configJson)
     let configValue = JsonValue.fromStr(configJson).asObject()
 
     let domainListURL = configValue.get("domainListURL").getOrThrow().asString().getValue()
@@ -40,52 +43,65 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     let ipProxyType = configValue.get("ipProxyType").getOrThrow().asInt().getValue()
 
     let serverIPOrDomain = configValue.get("server").getOrThrow().asString().getValue()
-    let port: UInt16 = UInt16(configValue.get("port").getOrThrow().asInt().getValue())
+    let serverPort = configValue.get("port").getOrThrow().asString().getValue()
+
+    let port = UInt16.parse(serverPort)
     let id = configValue.get("id").getOrThrow().asString().getValue()
 
-    Hilog.debug(0, "startVpn", "domainListURL: ${domainListURL}")
-    Hilog.debug(0, "startVpn", "ipListURL: ${ipListURL}")
-    Hilog.debug(0, "startVpn", "downloadDomainListViaProxy: ${downloadDomainListViaProxy}")
-    Hilog.debug(0, "startVpn", "downloadIPListViaProxy: ${downloadIPListViaProxy}")
-    Hilog.debug(0, "startVpn", "domainBlackList: ${domainBlackList}")
-    Hilog.debug(0, "startVpn", "ipBlackList: ${ipBlackList}")
-    Hilog.debug(0, "startVpn", "directDNSString: ${directDNSString}")
-    Hilog.debug(0, "startVpn", "proxyDNSString: ${proxyDNSString}")
-    Hilog.debug(0, "startVpn", "dnsProxyType: ${dnsProxyType}")
-    Hilog.debug(0, "startVpn", "ipProxyType: ${ipProxyType}")
-    Hilog.debug(0, "startVpn", "serverIPOrDomain: ${serverIPOrDomain}")
-    Hilog.debug(0, "startVpn", "port: ${port}")
-    Hilog.debug(0, "startVpn", "id: ${id}")
+    Hilog.debug(0x1799, "startVpn", "domainListURL: ${domainListURL}")
+    Hilog.debug(0x1799, "startVpn", "ipListURL: ${ipListURL}")
+    Hilog.debug(0x1799, "startVpn", "downloadDomainListViaProxy: ${downloadDomainListViaProxy}")
+    Hilog.debug(0x1799, "startVpn", "downloadIPListViaProxy: ${downloadIPListViaProxy}")
+    Hilog.debug(0x1799, "startVpn", "domainBlackList: ${domainBlackList}")
+    Hilog.debug(0x1799, "startVpn", "ipBlackList: ${ipBlackList}")
+    Hilog.debug(0x1799, "startVpn", "directDNSString: ${directDNSString}")
+    Hilog.debug(0x1799, "startVpn", "proxyDNSString: ${proxyDNSString}")
+    Hilog.debug(0x1799, "startVpn", "dnsProxyType: ${dnsProxyType}")
+    Hilog.debug(0x1799, "startVpn", "ipProxyType: ${ipProxyType}")
+    Hilog.debug(0x1799, "startVpn", "serverIPOrDomain: ${serverIPOrDomain}")
+    Hilog.debug(0x1799, "startVpn", "port: ${port}")
+    Hilog.debug(0x1799, "startVpn", "id: ${id}")
 
     let serverAddress = SocketAddress.resolve(serverIPOrDomain, port)
     if (serverAddress.isNone()) {
         throw Exception("Invalid server address ${serverIPOrDomain}:${port}")
     }
     let server = serverAddress.getOrThrow().hostAddress
+    Hilog.debug(0x1799, "startVpn", "serverIP: ${server}")
 
     let downloadFile = {
-        url: String, proxy: Bool =>
-        if (url == "") {
+        downloadURL: String, proxy: Bool =>
+        if (downloadURL == "") {
             return ""
         }
+
+        let url = URL.parse(downloadURL)
         let builder = ClientBuilder()
-        if (downloadDomainListViaProxy) {
+        var tlsConfig = TlsClientConfig()
+        tlsConfig.verifyMode = CertificateVerifyMode.TrustAll
+        builder.tlsConfig(tlsConfig)
+        if (proxy) {
             let connector = {
                 sa: SocketAddress =>
+                Hilog.debug(0x1799, "startVpn", "download from: ${url.hostName} ${sa.address} ${sa.port}")
                 let vmess = VmessConnection(id, server, port)
                 vmess.connect()
-                vmess.setHeader(ProtocolTcp, sa.address, sa.port)
+                vmess.setHeaderWithDomain(ProtocolTcp, url.hostName, sa.port)
                 return vmess
             }
             builder.connector(connector)
         }
         let client = builder.build()
-        let resp = client.get(domainListURL)
+        let resp = client.get(downloadURL)
         var result = ""
         if (resp.bodySize.isSome()) {
             let size = resp.bodySize.getOrThrow()
             let buffer = Array<UInt8>(size, item: 0)
-            resp.body.read(buffer)
+            var readCount = 0
+            while (readCount < size) {
+                let count = resp.body.read(buffer.slice(readCount, size - readCount))
+                readCount += count
+            }
             result = String.fromUtf8(buffer)
         }
         client.close()
@@ -94,6 +110,7 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
 
     var domainList = downloadFile(domainListURL, downloadDomainListViaProxy)
     var ipList = downloadFile(ipListURL, downloadIPListViaProxy)
+    Hilog.debug(0x1799, "startVpn", "download files: ${domainList.size} ${ipList.size}")
 
     let convertDNS = {
         dns: String =>
@@ -110,6 +127,7 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
 
     let directDNS = convertDNS(directDNSString)
     let proxyDNS = convertDNS(proxyDNSString)
+    Hilog.debug(0x1799, "startVpn", "dns: ${directDNS} ${proxyDNS}")
 
     let pool = IPPacketPool(10000)
     let dev = TunDevice(tunFd, pool)
@@ -118,6 +136,7 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     let tcpStack = TcpStack(dev, pool)
 
     if (domainBlackList != "") {
+        Hilog.debug(0x1799, "startVpn", "add InDomains BlackHoleListener")
         udpStack.register(
             CustomTunSocketHandler(
                 InDomains(domainBlackList),
@@ -127,6 +146,7 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
     }
 
     if (ipBlackList != "") {
+        Hilog.debug(0x1799, "startVpn", "add InAddresses BlackHoleListener")
         let handler = CustomTunSocketHandler(
             InAddresses(ipBlackList),
             BlackHoleListener()
@@ -146,24 +166,28 @@ func startVpn(runtime: JSContext, callInfo: JSCallInfo): JSValue {
         } else {
             checker = Not(All())
         }
+        Hilog.debug(0x1799, "startVpn", "add domainList VmessProxyListener")
         udpStack.register(CustomTunSocketHandler(checker, VmessProxyListener(id, server, port).dnat(proxyDNS)))
     }
+    Hilog.debug(0x1799, "startVpn", "add OnlyDNSRequest DnsDirectListener")
     udpStack.register(CustomTunSocketHandler(OnlyDNSRequest(), DnsDirectListener(directDNS)))
 
     if (ipList != "") {
         var checker: TunSocketChecker = All()
-        if (dnsProxyType == 1) {
-            checker = InAddresses(domainList)
-        } else if (dnsProxyType == 2) {
-            checker = Not(InAddresses(domainList))
-        } else if (dnsProxyType == 3) {
+        if (ipProxyType == 1) {
+            checker = InAddresses(ipList)
+        } else if (ipProxyType == 2) {
+            checker = Not(InAddresses(ipList))
+        } else if (ipProxyType == 3) {
             checker = All()
         } else {
             checker = Not(All())
         }
+        Hilog.debug(0x1799, "startVpn", "add ipList VmessProxyListener")
         udpStack.register(CustomTunSocketHandler(checker, VmessProxyListener(id, server, port)))
         tcpStack.register(CustomTunSocketHandler(checker, VmessProxyListener(id, server, port)))
     }
+    Hilog.debug(0x1799, "startVpn", "add All DirectListener")
     udpStack.register(CustomTunSocketHandler(All(), UdpDirectListener()))
     tcpStack.register(CustomTunSocketHandler(All(), TcpDirectListener()))
 

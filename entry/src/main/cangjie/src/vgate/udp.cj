@@ -53,7 +53,7 @@ public class UdpStack <: IPProtocolStack & TunSocketManager {
             }
             for (socket in outdatedSockets) {
                 socket.close()
-                Hilog.debug(0, "UdpStack",
+                Hilog.debug(0x1799, "UdpStack",
                     "Close outdated udp socket ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                 )
             }
@@ -183,6 +183,10 @@ public open class UdpDirectListener <: TunSocketListener {
             udp.bind()
             connect(udp, socket)
 
+            Hilog.debug(0x1799, logTag,
+                "UDP(Start) Init ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            )
+
             spawn {
                 try {
                     var buffer = Array<UInt8>(IPPacketMaxSize, item: 0)
@@ -198,13 +202,13 @@ public open class UdpDirectListener <: TunSocketListener {
                     }
                 } catch (e: Exception) {
                     if (!udp.isClosed()) {
-                        Hilog.error(0, logTag,
+                        Hilog.error(0x1799, logTag,
                             "${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
                         )
                     }
                 } finally {
                     socket.close()
-                    Hilog.debug(0, logTag,
+                    Hilog.debug(0x1799, logTag,
                         "UDP(In) Closed ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort}"
                     )
                 }
@@ -222,12 +226,12 @@ public open class UdpDirectListener <: TunSocketListener {
                 udp.send(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, logTag,
+            Hilog.error(0x1799, logTag,
                 "Send ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort} ${exceptionToString(e)}"
             )
         } finally {
             udp.close()
-            Hilog.debug(0, logTag,
+            Hilog.debug(0x1799, logTag,
                 "UDP(Out) Closed ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
         }

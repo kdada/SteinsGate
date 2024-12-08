@@ -19,12 +19,16 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
 
   async onCreate(want: Want): Promise<void> {
     this.vpnConnection = vpnExtension.createVpnConnection(this.context);
-    hilog.info(0x0000, 'debugVPN', '%{public}s', 'Succeeded to create vpn connection');
+    hilog.info(0x1799, 'debugVPN', '%{public}s', 'Succeeded to create vpn connection');
     await this.SetupVpn();
     let configPath = this.context.filesDir + "/config.json"
-    hilog.info(0x0000, 'debugVPN', `Start vpn with config ${configPath}`);
-    cjlib.startVpn(this.tunFd, configPath);
-    hilog.info(0x0000, 'debugVPN', `Succeeded to connect server`);
+    hilog.info(0x1799, 'debugVPN', `Start vpn with config ${configPath}`);
+    try {
+      cjlib.startVpn(this.tunFd, configPath);
+    } catch (e) {
+      hilog.info(0x1799, 'debugVPN', `Failed to start vpn ${e}`);
+    }
+    hilog.info(0x1799, 'debugVPN', `Succeeded to connect server`);
     //await this.Protect();
   }
 
@@ -33,9 +37,9 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
   async Protect(): Promise<void> {
     try {
       await this.vpnConnection!.protect(this.connFd)
-      hilog.info(0x0000, 'debugVPN', `Succeeded to protect fd: ${this.connFd}`);
+      hilog.info(0x1799, 'debugVPN', `Succeeded to protect fd: ${this.connFd}`);
     } catch (error) {
-      hilog.error(0x0000, 'debugVPN', 'vpn protect fail: %{public}s', JSON.stringify(error) ?? '');
+      hilog.error(0x1799, 'debugVPN', 'vpn protect fail: %{public}s', JSON.stringify(error) ?? '');
     }
   }
 
@@ -85,20 +89,20 @@ export default class SteinsGateAbility extends VpnExtensionAbility {
 
     try {
       this.tunFd = await this.vpnConnection!.create(config);
-      hilog.info(0x0000, 'debugVPN', `Succeeded to create vpn: ${this.tunFd}`);
+      hilog.info(0x1799, 'debugVPN', `Succeeded to create vpn: ${this.tunFd}`);
     } catch (error) {
-      hilog.error(0x0000, 'debugVPN', 'vpn set up fail: %{public}s', JSON.stringify(error) ?? '');
+      hilog.error(0x1799, 'debugVPN', 'vpn set up fail: %{public}s', JSON.stringify(error) ?? '');
     }
   }
 
   async onDestroy(): Promise<void> {
     cjlib.stopVpn()
-    hilog.info(0x0000, 'debugVPN', `Succeeded to disconnect server`);
+    hilog.info(0x1799, 'debugVPN', `Succeeded to disconnect server`);
     try {
       await this.vpnConnection?.destroy()
-      hilog.info(0x0000, 'debugVPN', `Succeeded to destroy vpn: ${this.tunFd}`);
+      hilog.info(0x1799, 'debugVPN', `Succeeded to destroy vpn: ${this.tunFd}`);
     } catch (error) {
-      hilog.error(0x0000, 'debugVPN', 'vpn destroy fail: %{public}s', JSON.stringify(error) ?? '');
+      hilog.error(0x1799, 'debugVPN', 'vpn destroy fail: %{public}s', JSON.stringify(error) ?? '');
     }
   }
 }

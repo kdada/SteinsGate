@@ -98,7 +98,7 @@ struct Index {
       securityLevel: distributedKVStore.SecurityLevel.S2,
     }, (err: Error, store: distributedKVStore.DeviceKVStore) => {
       if (err) {
-        hilog.error(0x0001, '[KV Sample]',
+        hilog.error(0x1799, '[KV Sample]',
           `Failed to get KVStore. Code: ${err.name}, message: ${err.message}`);
         return;
       }
@@ -271,7 +271,7 @@ struct Index {
                 }
                 let configData = JSON.stringify(config)
                 let path = this.getUIContext().getHostContext()!.filesDir + "/config.json"
-                let file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
+                let file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC)
                 fs.writeSync(file.fd, configData)
                 fs.closeSync(file.fd)
                 vpnExtension.startVpnExtensionAbility(this.want);

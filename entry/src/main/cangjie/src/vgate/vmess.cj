@@ -34,6 +34,7 @@ public class VmessConnection <: StreamingSocket {
 
     var protocol = UInt8(0)
     var address = Array<UInt8>()
+    var domain = Array<UInt8>()
     var port = UInt16(0)
 
     var requestKey = Array<UInt8>()
@@ -103,8 +104,12 @@ public class VmessConnection <: StreamingSocket {
     }
 
     func writeRequestHeader() {
+        var addressLength = 4
+        if (domain.size > 0) {
+            addressLength = 1 + domain.size
+        }
         let buffer = Array<UInt8>(
-            16 /*Auth*/ + 1 /*Ver*/ + 16 /*IV*/ + 16 /*Key*/ + 1 /*V*/ + 1 /*Opt*/ + 1 /*P+Sec*/ + 1 /*Reserved*/ + 1 /*Cmd*/ + 2 /*Port*/ + 1 /*T*/ + 4 /*A*/ + 4 /*F*/ ,
+            16 /*Auth*/ + 1 /*Ver*/ + 16 /*IV*/ + 16 /*Key*/ + 1 /*V*/ + 1 /*Opt*/ + 1 /*P+Sec*/ + 1 /*Reserved*/ + 1 /*Cmd*/ + 2 /*Port*/ + 1 /*T*/ + addressLength /*A*/ + 4 /*F*/ ,
             item: 0
         )
         let r = SecureRandom()
@@ -160,10 +165,19 @@ public class VmessConnection <: StreamingSocket {
         offset += 1
         /*Port*/ port.writeBigEndian(buffer.slice(offset, 2))
         offset += 2
-        /*T*/ buffer[offset] = 0x1
-        offset += 1
-        /*A*/ address.copyTo(buffer, 0, offset, 4)
-        offset += 4
+        if (domain.size > 0) {
+            /*T*/ buffer[offset] = 0x2
+            offset += 1
+            /*AS*/ buffer[offset] = UInt8(domain.size)
+            offset += 1
+            /*A*/ domain.copyTo(buffer, 0, offset, domain.size)
+            offset += domain.size
+        } else {
+            /*T*/ buffer[offset] = 0x1
+            offset += 1
+            /*A*/ address.copyTo(buffer, 0, offset, 4)
+            offset += 4
+        }
         /*F*/ fnv32a(buffer.slice(16, buffer.size - 16 - 4)).copyTo(buffer, 0, offset, 4)
 
         let md5IV = MD5()
@@ -223,6 +237,12 @@ public class VmessConnection <: StreamingSocket {
     public func setHeader(protocol: UInt8, address: Array<UInt8>, port: UInt16) {
         this.protocol = protocol
         this.address = address
+        this.port = port
+    }
+
+    public func setHeaderWithDomain(protocol: UInt8, domain: String, port: UInt16) {
+        this.protocol = protocol
+        this.domain = domain.toArray()
         this.port = port
     }
 
@@ -356,6 +376,10 @@ public class VmessProxyListener <: TunSocketListener {
             }
             vmess.setHeader(socket.protocol, ip, socket.destinationPort)
 
+            Hilog.debug(0x1799, "VmessProxyListener",
+                "VMESS(Start) Init ${socket.protocol} ${socket.sourceIP}:${socket.sourcePort} -> ${ip}:${socket.destinationPort}"
+            )
+
             spawn {
                 try {
                     var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
@@ -371,12 +395,12 @@ public class VmessProxyListener <: TunSocketListener {
                     }
                 } catch (e: Exception) {
                     if (!vmess.isClosed()) {
-                        Hilog.error(0, "VmessProxyListener",
+                        Hilog.error(0x1799, "VmessProxyListener",
                             "Receive ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
                     }
                 } finally {
                     socket.close()
-                    Hilog.debug(0, "VmessProxyListener",
+                    Hilog.debug(0x1799, "VmessProxyListener",
                         "VMESS Receive Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                     )
                 }
@@ -394,10 +418,11 @@ public class VmessProxyListener <: TunSocketListener {
                 vmess.write(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, "VmessProxyListener", "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
+            Hilog.error(0x1799, "VmessProxyListener",
+                "Send ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}")
         } finally {
             vmess.close()
-            Hilog.debug(0, "VmessProxyListener",
+            Hilog.debug(0x1799, "VmessProxyListener",
                 "VMESS Send Done ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
         }

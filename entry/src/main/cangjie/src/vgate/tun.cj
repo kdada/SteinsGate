@@ -90,7 +90,7 @@ public class TunDevice {
                     }
                 }
             } catch (e: Exception) {
-                Hilog.error(0, "TunDevice Read", exceptionToString(e))
+                Hilog.error(0x1799, "TunDevice Read", exceptionToString(e))
             }
         }
         packet.release()
@@ -113,7 +113,7 @@ public class TunDevice {
                     releaseArrayRawData(rawData)
                 }
             } catch (e: Exception) {
-                Hilog.error(0, "TunDevice Write", exceptionToString(e))
+                Hilog.error(0x1799, "TunDevice Write", exceptionToString(e))
             } finally {
                 p?.release()
                 p = None

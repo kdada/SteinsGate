@@ -74,7 +74,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                         sockets.remove(key)
                     }
                 }
-                Hilog.debug(0, "TcpStack",
+                Hilog.debug(0x1799, "TcpStack",
                     "Close/Remove outdated tcp socket ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
                 )
             }
@@ -87,7 +87,7 @@ public class TcpStack <: IPProtocolStack & TunSocketManager {
                 try {
                     handle(packet)
                 } catch (e: Exception) {
-                    Hilog.error(0, "TcpStack", exceptionToString(e))
+                    Hilog.error(0x1799, "TcpStack", exceptionToString(e))
                 }
             }
         }
@@ -395,6 +395,10 @@ public class TcpDirectListener <: TunSocketListener {
             tcp.writeTimeout = timeout
             tcp.connect(timeout: timeout)
 
+            Hilog.debug(0x1799, "TcpDirectListener",
+                "TCP(Start) Init ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
+            )
+
             spawn {
                 try {
                     var buffer = Array<UInt8>(tcpMaxPayloadSize, item: 0)
@@ -410,13 +414,13 @@ public class TcpDirectListener <: TunSocketListener {
                     }
                 } catch (e: Exception) {
                     if (!tcp.isClosed()) {
-                        Hilog.error(0, "TcpDirectListener",
+                        Hilog.error(0x1799, "TcpDirectListener",
                             "Receive ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort} ${exceptionToString(e)}"
                         )
                     }
                 } finally {
                     socket.close()
-                    Hilog.debug(0, "TcpDirectListener",
+                    Hilog.debug(0x1799, "TcpDirectListener",
                         "TCP(In) Closed ${socket.destinationIP}:${socket.destinationPort} -> ${socket.sourceIP}:${socket.sourcePort}"
                     )
                 }
@@ -434,11 +438,11 @@ public class TcpDirectListener <: TunSocketListener {
                 tcp.write(buffer.slice(0, count))
             }
         } catch (e: Exception) {
-            Hilog.error(0, "TcpDirectListener",
+            Hilog.error(0x1799, "TcpDirectListener",
                 "Send ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort} ${exceptionToString(e)}"
             )
         } finally {
-            Hilog.debug(0, "TcpDirectListener",
+            Hilog.debug(0x1799, "TcpDirectListener",
                 "TCP(Out) Closed ${socket.sourceIP}:${socket.sourcePort} -> ${socket.destinationIP}:${socket.destinationPort}"
             )
             tcp.close()

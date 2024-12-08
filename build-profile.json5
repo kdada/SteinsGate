@@ -6,9 +6,9 @@
         "type": "HarmonyOS",
         "material": {
           "certpath": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.cer",
-          "storePassword": "0000001B500B9BF5083161E36B3DC4CEC9A3F62AD49B9A8F1C6608A92109FE08FCC31E7AB65D0E604809BD",
+          "storePassword": "000000198FF3169F8953C49393D5AF74F7432508DA3558696EEED0262EF0756B3FE1628CE88273DDE0",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BC43BD5B43D26C7A6B7FBE33670CD8D1EB79DEA9AF46139CBB7C642CB83C97A47ED9949F066DE5D",
+          "keyPassword": "000000196DDAA13CAC06F2F8755BC7733157C8513E50528FF0DB05CBEBC8F03E87A3D2ABEE1FEDECF5",
           "profile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.p12"
