@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.cer",
-          "storePassword": "000000198FF3169F8953C49393D5AF74F7432508DA3558696EEED0262EF0756B3FE1628CE88273DDE0",
+          "certpath": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate2_ucMD4i35ROnGwjUWyRAYzwr0QqQgq9PUYrvMzS5Zcyk=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "000000196DDAA13CAC06F2F8755BC7733157C8513E50528FF0DB05CBEBC8F03E87A3D2ABEE1FEDECF5",
-          "profile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.p7b",
+          "keyPassword": "0000001BECD65E93ADBFB17C30753262D6A6C580BE7C552FAAFA5C20F6704FFB7C68AC635E87B7356A5A9B",
+          "profile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate2_ucMD4i35ROnGwjUWyRAYzwr0QqQgq9PUYrvMzS5Zcyk=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate_7ABCte6mzWHUitNeUbJ9AtHS_bbpcqYJBSPaJ7NcjNc=.p12"
+          "storeFile": "C:\\Users\\Kira\\.ohos\\config\\default_SteinsGate2_ucMD4i35ROnGwjUWyRAYzwr0QqQgq9PUYrvMzS5Zcyk=.p12",
+          "storePassword": "0000001B6C816EAD8E8F9267089FCF856B021ABA6E8061F8A9E992C6ED6CBACFEA9D88D1713D63859D3DEB"
         }
       }
     ],
@@ -19,7 +19,7 @@
       {
         "name": "default",
         "signingConfig": "default",
-        "compatibleSdkVersion": "5.0.0(12)",
+        "compatibleSdkVersion": "5.0.3(15)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {
